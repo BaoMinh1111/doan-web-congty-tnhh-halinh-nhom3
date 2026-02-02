@@ -25,5 +25,5 @@
 ## Thành viên nhóm (Nhóm 3)
 - **Nguyễn Phương Bảo Minh** (GitHub: BaoMinh1111) - Trưởng nhóm
 - **Nguyễn Thị Hương Giang** (GitHub: Hương Giang) - Thành viên nhóm
-- **Bùi Phạm Xuân Nghi** (MSSV: clarice-xn) - Thành viên nhóm
-- **Phạm Hoàng Lâm Vũ** (MSSV: UEH.Woo) - Thành viên nhóm
+- **Bùi Phạm Xuân Nghi** (GitHub: clarice-xn) - Thành viên nhóm
+- **Phạm Hoàng Lâm Vũ** (GitHub: UEH.Woo) - Thành viên nhóm
