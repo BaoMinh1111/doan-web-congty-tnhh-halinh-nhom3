@@ -3,7 +3,7 @@
 Đề tài: Xây dựng website thương mại điện tử (B2C) bán linh kiện máy tính (CPU, RAM, mainboard, v.v.) cho công ty Hà Linh.
 
 ## Thành viên nhóm (Nhóm 3)
-- **Nguyễn Phương Bảo Minh** () - Trưởng nhóm
-- **Nguyễn Thị Hương ** (MSSV: ...) - Thành viên nhóm
-- **Bùi Phạm Xuân Nghi** (MSSV: ...) - Thành viên nhóm
-- **Phạm Hoàng Lâm ** (MSSV: ...) - Thành viên nhóm
+- **Nguyễn Phương Bảo Minh** (GitHub: BaoMinh1111) - Trưởng nhóm
+- **Nguyễn Thị Hương Giang** (GitHub: Hương Giang) - Thành viên nhóm
+- **Bùi Phạm Xuân Nghi** (MSSV: clarice-xn) - Thành viên nhóm
+- **Phạm Hoàng Lâm Vũ** (MSSV: UEH.Woo) - Thành viên nhóm
