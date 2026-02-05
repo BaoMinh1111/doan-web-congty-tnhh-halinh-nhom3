@@ -16,7 +16,7 @@ Xem file: docs/sơ đồ oop.png
 - **BaseController**: lớp cha cho Controller, có renderView(), jsonResponse().
 - **HomeController**, **ProductController**, **CartController**, **AdminController** (kế thừa BaseController).
 
-## 3. Sơ dồ Chức năng (FD)
+## 3. Sơ đồ Chức năng (FD)
 Xem file: docs/sơ đồ fd.png
 - Các nhóm chức năng chính: Hiển thị và duyệt sản phẩm, Tìm kiếm & lọc sản phẩm, Quản lý giỏ hàng, Đặt hàng & quản lý đơn hàng, Quản trị hệ thống.  
 - Quan hệ phân cấp: Hệ thống TMĐT Hà Linh Tech (cấp 0) phân rã thành 5 nhóm chức năng cấp 1, mỗi nhóm tiếp tục phân rã thành các chức năng chi tiết cấp 2 (ví dụ: "Hiển thị và duyệt sản phẩm" → Hiển thị trang chủ, Hiển thị danh mục sản phẩm, Xem chi tiết sản phẩm).  
