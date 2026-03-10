@@ -7,9 +7,10 @@ class ProductModel extends BaseModel
 {
     protected string $table = "products";
 
+    // Lấy tất cả sản phẩm
     public function getAll(): array
     {
-        $sql = "SELECT * FROM products ORDER BY id DESC";
+        $sql = "SELECT * FROM {$this->table} ORDER BY id DESC";
         $rows = $this->fetchAll($sql);
 
         $products = [];
@@ -20,9 +21,10 @@ class ProductModel extends BaseModel
         return $products;
     }
 
+    // Lấy sản phẩm theo ID
     public function getById(int $id): ?ProductEntity
     {
-        $sql = "SELECT * FROM products WHERE id = ?";
+        $sql = "SELECT * FROM {$this->table} WHERE id = ?";
         $row = $this->fetchOne($sql, [$id]);
 
         if (!$row) {
@@ -32,14 +34,15 @@ class ProductModel extends BaseModel
         return new ProductEntity($row);
     }
 
+    // Tìm kiếm sản phẩm
     public function search(string $keyword): array
     {
-        $sql = "SELECT * FROM products 
+        $sql = "SELECT * FROM {$this->table}
                 WHERE name LIKE ? OR description LIKE ?";
 
         $rows = $this->fetchAll($sql, [
-            "%$keyword%",
-            "%$keyword%"
+            "%{$keyword}%",
+            "%{$keyword}%"
         ]);
 
         $products = [];
@@ -50,9 +53,17 @@ class ProductModel extends BaseModel
         return $products;
     }
 
+    // Thêm sản phẩm
     public function add(array $data): bool
     {
-        $sql = "INSERT INTO products 
+        $product = new ProductEntity($data);
+        $errors = $product->validate();
+
+        if (!empty($errors)) {
+            return false;
+        }
+
+        $sql = "INSERT INTO {$this->table}
                 (name, price, description, image, category_id, stock)
                 VALUES (?, ?, ?, ?, ?, ?)";
 
@@ -66,9 +77,17 @@ class ProductModel extends BaseModel
         ]);
     }
 
+    // Cập nhật sản phẩm
     public function update(int $id, array $data): bool
     {
-        $sql = "UPDATE products 
+        $product = new ProductEntity($data);
+        $errors = $product->validate();
+
+        if (!empty($errors)) {
+            return false;
+        }
+
+        $sql = "UPDATE {$this->table}
                 SET name=?, price=?, description=?, image=?, category_id=?, stock=?
                 WHERE id=?";
 
@@ -83,9 +102,10 @@ class ProductModel extends BaseModel
         ]);
     }
 
+    // Xóa sản phẩm
     public function delete(int $id): bool
     {
-        $sql = "DELETE FROM products WHERE id = ?";
+        $sql = "DELETE FROM {$this->table} WHERE id = ?";
         return $this->prepareStmt($sql, [$id]);
     }
 }
