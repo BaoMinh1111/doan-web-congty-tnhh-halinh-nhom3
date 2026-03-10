@@ -14,12 +14,14 @@ class ProductEntity
     {
         $this->id = $data['id'] ?? 0;
         $this->name = $data['name'] ?? '';
-        $this->price = $data['price'] ?? 0;
+        $this->price = (float)($data['price'] ?? 0);
         $this->description = $data['description'] ?? '';
         $this->image = $data['image'] ?? '';
-        $this->categoryId = $data['category_id'] ?? 0;
+        $this->categoryId = (int)($data['category_id'] ?? 0);
         $this->stock = $data['stock'] ?? null;
     }
+
+    // ===== GETTER =====
 
     public function getId(): int
     {
@@ -41,6 +43,13 @@ class ProductEntity
         return $this->categoryId;
     }
 
+    public function getStock(): ?int
+    {
+        return $this->stock;
+    }
+
+    // ===== VALIDATE DATA =====
+
     public function validate(): array
     {
         $errors = [];
@@ -59,6 +68,8 @@ class ProductEntity
 
         return $errors;
     }
+
+    // ===== CONVERT DATA =====
 
     public function toArray(): array
     {
