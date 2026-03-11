@@ -97,4 +97,5 @@ class ProductEntity
  * validate() chưa kiểm tra độ dài name: ít nhất 3 kí tự, dài nhất 255 kí tự
  * Constructor không trim input: lỗi phổ biến khi user nhập có khoảng trắng thừa
  * toArray() nên dùng JSON_UNESCAPED_UNICODE và bỏ id khi insert: Khi dùng toArray() để INSERT vào DB, nếu id = 0 sẽ gây lỗi hoặc insert sai
+ * dùng associative array thay cho indexed array
 */
