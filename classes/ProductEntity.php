@@ -10,18 +10,18 @@ class ProductEntity
     private int $categoryId;
     private ?int $stock;
 
-    public function __construct(array $data)
+    public function __construct(array $data = [])
     {
-        $this->id = $data['id'] ?? 0;
-        $this->name = $data['name'] ?? '';
-        $this->price = (float)($data['price'] ?? 0);
-        $this->description = $data['description'] ?? '';
-        $this->image = $data['image'] ?? '';
-        $this->categoryId = (int)($data['category_id'] ?? 0);
-        $this->stock = $data['stock'] ?? null;
+        $this->id = isset($data['id']) ? (int)$data['id'] : 0;
+        $this->name = isset($data['name']) ? trim((string)$data['name']) : '';
+        $this->price = isset($data['price']) ? (float)$data['price'] : 0;
+        $this->description = isset($data['description']) ? trim((string)$data['description']) : '';
+        $this->image = isset($data['image']) ? trim((string)$data['image']) : '';
+        $this->categoryId = isset($data['category_id']) ? (int)$data['category_id'] : 0;
+        $this->stock = isset($data['stock']) ? (int)$data['stock'] : null;
     }
 
-    // ===== GETTER =====
+    // ===== GETTERS =====
 
     public function getId(): int
     {
@@ -38,6 +38,16 @@ class ProductEntity
         return $this->price;
     }
 
+    public function getDescription(): string
+    {
+        return $this->description;
+    }
+
+    public function getImage(): string
+    {
+        return $this->image;
+    }
+
     public function getCategoryId(): int
     {
         return $this->categoryId;
@@ -48,14 +58,20 @@ class ProductEntity
         return $this->stock;
     }
 
-    // ===== VALIDATE DATA =====
+    // ===== VALIDATION =====
 
     public function validate(): array
     {
         $errors = [];
 
-        if (empty($this->name)) {
-            $errors[] = "Tên sản phẩm không được rỗng";
+        $nameLength = strlen($this->name);
+
+        if ($nameLength < 3) {
+            $errors[] = "Tên sản phẩm phải có ít nhất 3 ký tự";
+        }
+
+        if ($nameLength > 255) {
+            $errors[] = "Tên sản phẩm không được quá 255 ký tự";
         }
 
         if ($this->price <= 0) {
@@ -66,15 +82,18 @@ class ProductEntity
             $errors[] = "Danh mục không hợp lệ";
         }
 
+        if ($this->stock !== null && $this->stock < 0) {
+            $errors[] = "Số lượng tồn kho không hợp lệ";
+        }
+
         return $errors;
     }
 
-    // ===== CONVERT DATA =====
+    // ===== ARRAY EXPORT =====
 
     public function toArray(): array
     {
-        return [
-            "id" => $this->id,
+        $data = [
             "name" => $this->name,
             "price" => $this->price,
             "description" => $this->description,
@@ -82,20 +101,25 @@ class ProductEntity
             "category_id" => $this->categoryId,
             "stock" => $this->stock
         ];
+
+        // Chỉ thêm id khi update
+        if ($this->id > 0) {
+            $data["id"] = $this->id;
+        }
+
+        return $data;
     }
+
+    // ===== JSON EXPORT =====
 
     public function toJson(): string
     {
-        return json_encode($this->toArray());
+        $json = json_encode($this->toArray(), JSON_UNESCAPED_UNICODE);
+
+        if ($json === false) {
+            throw new RuntimeException("JSON encode failed: " . json_last_error_msg());
+        }
+
+        return $json;
     }
 }
-
-
-/* Các vấn đề cần sửa: 
- * Thiếu getter cho description và image: ProductModel đã gọi $product->getDescription() và $product->getImage() nhưng Entity không có 2 getter này
- * toJson() không xử lý lỗi encode
- * validate() chưa kiểm tra độ dài name: ít nhất 3 kí tự, dài nhất 255 kí tự
- * Constructor không trim input: lỗi phổ biến khi user nhập có khoảng trắng thừa
- * toArray() nên dùng JSON_UNESCAPED_UNICODE và bỏ id khi insert: Khi dùng toArray() để INSERT vào DB, nếu id = 0 sẽ gây lỗi hoặc insert sai
- * dùng associative array thay cho indexed array
-*/
