@@ -166,3 +166,9 @@ class CategoryModel extends BaseModel
         return parent::delete($id);
     }
 }
+
+/* Các vấn đề cần sửa:
+ * search() không trim keyword và không guard chuỗi rỗng: nếu keyword rỗng sẽ trả toàn bộ bảng.
+ * Constructor không cần override nếu chỉ gọi parent::__construct()
+ * delete() cũng không cần override nếu không thêm logic
+*/
