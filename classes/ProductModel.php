@@ -109,3 +109,12 @@ class ProductModel extends BaseModel
         return $this->prepareStmt($sql, [$id]);
     }
 }
+
+
+/* Các vấn đề cần sửa:
+ * add() và update() return sai kiểu: prepareStmt() trả về PDOStatement, không phải bool. Ép kiểu ngầm sẽ luôn true dù SQL thất bại.
+ * delete() cũng có cùng vấn đề trên
+ * add() validate nhưng vẫn dùng $data thô thay vì Entity đã validate
+ * search() nên trả về rỗng thay vì gọi DB khi keyword trống
+ * add() nên throw exception thay vì return false khi validate lỗi
+*/
