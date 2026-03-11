@@ -236,3 +236,11 @@ class UserModel extends BaseModel
         return array_map(fn($row) => new UserEntity($row), $rows);
     }
 }
+
+/* Các vấn đề cần sửa:
+* insertEntity() gọi $user->toArray() có thể đưa password_hash vào DB dạng plain:  Nếu toArray() trả passwordHash chưa hash thì nguy hiểm. 
+Model không nên tin tưởng hoàn toàn vào toArray() cho trường hợp nhạy cảm này — nên dùng getter rõ ràng
+* getAll() trả về password_hash của tất cả  user: getAll() dùng SELECT * → query này kéo tất cả các cột từ bảng users về PHP, 
+bao gồm cả cột password_hash. Dù sau đó UserEntity có ẩn nó khỏi toArray() hay không, thì dữ liệu hash vẫn đã được truyền từ DB lên PHP memory.
+* Thêm method findAdmins()
+*/
