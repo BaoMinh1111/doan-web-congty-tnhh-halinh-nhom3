@@ -242,3 +242,9 @@ class UserEntity
         return json_encode($this->toPublicArray(), JSON_UNESCAPED_UNICODE);
     }
 }
+
+/* Các vấn đề cần sửa:
+* toJson() thiếu check lỗi encode
+* validate() thiếu độ dài tối thiểu cho username: ít nhất 3 kí tự, dài nhất 50 kí 
+* Nên validate username chỉ chứa ký tự hợp lệ
+*/
