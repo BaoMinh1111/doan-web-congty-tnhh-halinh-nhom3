@@ -145,3 +145,8 @@ class CategoryEntity
         return json_encode($this->toArray(), JSON_UNESCAPED_UNICODE);
     }
 }
+
+/* Các vấn đề cần sửa:
+* toJson() không check lỗi encode
+* validate() thiếu check độ dài tối thiểu cho name: ít nhất 3 kí tự, dài nhất 255 kí 
+*/
