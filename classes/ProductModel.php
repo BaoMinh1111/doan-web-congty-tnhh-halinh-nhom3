@@ -7,7 +7,6 @@ class ProductModel extends BaseModel
 {
     protected string $table = "products";
 
-    // Lấy tất cả sản phẩm
     public function getAll(): array
     {
         $sql = "SELECT * FROM {$this->table} ORDER BY id DESC";
@@ -21,7 +20,6 @@ class ProductModel extends BaseModel
         return $products;
     }
 
-    // Lấy sản phẩm theo ID
     public function getById(int $id): ?ProductEntity
     {
         $sql = "SELECT * FROM {$this->table} WHERE id = ?";
@@ -34,15 +32,20 @@ class ProductModel extends BaseModel
         return new ProductEntity($row);
     }
 
-    // Tìm kiếm sản phẩm
     public function search(string $keyword): array
     {
+        $keyword = trim($keyword);
+
+        if ($keyword === '') {
+            return [];
+        }
+
         $sql = "SELECT * FROM {$this->table}
                 WHERE name LIKE ? OR description LIKE ?";
 
         $rows = $this->fetchAll($sql, [
-            "%{$keyword}%",
-            "%{$keyword}%"
+            "%$keyword%",
+            "%$keyword%"
         ]);
 
         $products = [];
@@ -53,21 +56,22 @@ class ProductModel extends BaseModel
         return $products;
     }
 
-    // Thêm sản phẩm
     public function add(array $data): bool
     {
         $product = new ProductEntity($data);
-        $errors = $product->validate();
 
+        $errors = $product->validate();
         if (!empty($errors)) {
-            return false;
+            throw new Exception(implode(", ", $errors));
         }
+
+        $data = $product->toArray();
 
         $sql = "INSERT INTO {$this->table}
                 (name, price, description, image, category_id, stock)
                 VALUES (?, ?, ?, ?, ?, ?)";
 
-        return $this->prepareStmt($sql, [
+        $stmt = $this->prepareStmt($sql, [
             $data['name'],
             $data['price'],
             $data['description'],
@@ -75,23 +79,27 @@ class ProductModel extends BaseModel
             $data['category_id'],
             $data['stock']
         ]);
+
+        return $stmt->rowCount() > 0;
     }
 
-    // Cập nhật sản phẩm
     public function update(int $id, array $data): bool
     {
+        $data['id'] = $id;
         $product = new ProductEntity($data);
-        $errors = $product->validate();
 
+        $errors = $product->validate();
         if (!empty($errors)) {
-            return false;
+            throw new Exception(implode(", ", $errors));
         }
+
+        $data = $product->toArray();
 
         $sql = "UPDATE {$this->table}
                 SET name=?, price=?, description=?, image=?, category_id=?, stock=?
                 WHERE id=?";
 
-        return $this->prepareStmt($sql, [
+        $stmt = $this->prepareStmt($sql, [
             $data['name'],
             $data['price'],
             $data['description'],
@@ -100,21 +108,16 @@ class ProductModel extends BaseModel
             $data['stock'],
             $id
         ]);
+
+        return $stmt->rowCount() >= 0;
     }
 
-    // Xóa sản phẩm
     public function delete(int $id): bool
     {
-        $sql = "DELETE FROM {$this->table} WHERE id = ?";
-        return $this->prepareStmt($sql, [$id]);
+        $sql = "DELETE FROM {$this->table} WHERE id=?";
+
+        $stmt = $this->prepareStmt($sql, [$id]);
+
+        return $stmt->rowCount() > 0;
     }
 }
-
-
-/* Các vấn đề cần sửa:
- * add() và update() return sai kiểu: prepareStmt() trả về PDOStatement, không phải bool. Ép kiểu ngầm sẽ luôn true dù SQL thất bại.
- * delete() cũng có cùng vấn đề trên
- * add() validate nhưng vẫn dùng $data thô thay vì Entity đã validate
- * search() nên trả về rỗng thay vì gọi DB khi keyword trống
- * add() nên throw exception thay vì return false khi validate lỗi
-*/
