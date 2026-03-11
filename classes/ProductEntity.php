@@ -89,3 +89,12 @@ class ProductEntity
         return json_encode($this->toArray());
     }
 }
+
+
+/* Các vấn đề cần sửa: 
+ * Thiếu getter cho description và image: ProductModel đã gọi $product->getDescription() và $product->getImage() nhưng Entity không có 2 getter này
+ * toJson() không xử lý lỗi encode
+ * validate() chưa kiểm tra độ dài name: ít nhất 3 kí tự, dài nhất 255 kí tự
+ * Constructor không trim input: lỗi phổ biến khi user nhập có khoảng trắng thừa
+ * toArray() nên dùng JSON_UNESCAPED_UNICODE và bỏ id khi insert: Khi dùng toArray() để INSERT vào DB, nếu id = 0 sẽ gây lỗi hoặc insert sai
+*/
