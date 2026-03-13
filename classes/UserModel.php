@@ -24,12 +24,15 @@ class UserModel extends BaseModel
 
     /**
      * Lấy tất cả người dùng, sắp xếp mới nhất trước.
-     *
+     * Chỉ lấy các cột cần thiết, không lấy password_hash.
+     * 
      * @return UserEntity[]
      */
     public function getAll(): array
     {
-        $rows = $this->fetchAll("SELECT * FROM {$this->table} ORDER BY id DESC");
+        $rows = $this->fetchAll(
+            "SELECT id, username, role, email FROM {$this->table} ORDER BY id DESC"
+        );
         return array_map(fn($row) => new UserEntity($row), $rows);
     }
 
@@ -51,6 +54,7 @@ class UserModel extends BaseModel
     /**
      * Thêm người dùng mới từ UserEntity.
      * Validate trước khi ghi vào CSDL.
+     * Dùng getter rõ ràng thay vì toArray() để kiểm soát chặt chẽ trường password_hash.
      *
      * @param  UserEntity $user
      * @return int              ID của bản ghi vừa insert.
@@ -64,7 +68,13 @@ class UserModel extends BaseModel
                 'Dữ liệu UserEntity không hợp lệ: ' . implode(' | ', $errors)
             );
         }
-        return $this->insert($user->toArray());
+
+        return $this->insert([
+            'username'      =>  $user ->getUsername(),
+            'password_hash' =>  $user ->getPassword_hash(),
+            'role'          =>  $user ->getRole(),
+            'email'         =>  $user ->getEmail(),
+        ]);
     }
 
     /**
@@ -119,7 +129,21 @@ class UserModel extends BaseModel
         );
         return $row ? new UserEntity($row) : null;
     }
-
+    /** 
+     * Lấy tất cả người dùng có role 'admin'.
+     * Không lấy password_hash.
+     *
+     * @return UserEntity[]
+     */
+    public function findAdmins():array
+    {
+        $row = $this->fetchAll(
+            "SELECT id, username, role, email FROM {$this->$table) WHERE role = 'admin'
+            ORDER BY id ASC"
+        );
+        return array_map(fn($row) =>new UserEntity($row), $rows);
+    }
+    
     /**
      * Kiểm tra username đã tồn tại chưa.
      * Truyền $excludeId khi đang update để tránh conflict với chính mình.
@@ -237,10 +261,4 @@ class UserModel extends BaseModel
     }
 }
 
-/* Các vấn đề cần sửa:
-* insertEntity() gọi $user->toArray() có thể đưa password_hash vào DB dạng plain:  Nếu toArray() trả passwordHash chưa hash thì nguy hiểm. 
-Model không nên tin tưởng hoàn toàn vào toArray() cho trường hợp nhạy cảm này — nên dùng getter rõ ràng
-* getAll() trả về password_hash của tất cả  user: getAll() dùng SELECT * → query này kéo tất cả các cột từ bảng users về PHP, 
-bao gồm cả cột password_hash. Dù sau đó UserEntity có ẩn nó khỏi toArray() hay không, thì dữ liệu hash vẫn đã được truyền từ DB lên PHP memory.
-* Thêm method findAdmins()
-*/
+

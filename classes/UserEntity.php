@@ -154,7 +154,7 @@ class UserEntity
      * Kiểm tra tính hợp lệ của dữ liệu người dùng.
      *
      * Quy tắc:
-     *   - username: không được rỗng, không vượt quá 50 ký tự.
+     *   - username: không được rỗng, 3–50 ký tự, chỉ chứa chữ cái, số, dấu gạch dưới, gạch ngang.
      *   - email: không được rỗng, đúng định dạng, không vượt quá 100 ký tự.
      *   - role: phải là 'admin' hoặc 'user'.
      *
@@ -171,8 +171,12 @@ class UserEntity
         // Validate username
         if (empty($this->username)) {
             $errors['username'] = 'Tên đăng nhập không được để trống.';
+        } elseif (mb_strlen($this->username)<3) {
+            $errors['username'] = 'Tên đăng nhập không được ít hơn 3 ký tự';
         } elseif (mb_strlen($this->username) > 50) {
             $errors['username'] = 'Tên đăng nhập không được vượt quá 50 ký tự.';
+        } elseif (!preg_match('/^[a-zA-Z0-9_\-]+$/', $this->username)) {
+            $errors['username'] = 'Tên đăng nhập chỉ được chứa chữ cái, số, dấu gạch dưới (_) và gạch ngang (-).';
         }
 
         // Validate email
@@ -236,15 +240,18 @@ class UserEntity
      * Dùng cho AJAX response.
      *
      * @return string
+     * @throws RuntimeException Nếu json_encode thất bại.
      */
     public function toJson(): string
     {
-        return json_encode($this->toPublicArray(), JSON_UNESCAPED_UNICODE);
+        $json = json_encode($this->toPublicArray(), JSON_UNESCAPED_UNICODE);
+        if ($json===false){
+            throw new RuntimeException(
+                'Không thể di chuyển UserEntity sang JSON: '.json_last_error_msg()
+            );
+        }
+        return $json;
     }
 }
 
-/* Các vấn đề cần sửa:
-* toJson() thiếu check lỗi encode
-* validate() thiếu độ dài tối thiểu cho username: ít nhất 3 kí tự, dài nhất 50 kí 
-* Nên validate username chỉ chứa ký tự hợp lệ
-*/
+
