@@ -176,3 +176,10 @@ abstract class BaseController
         return $this->getMethod() === 'POST';
     }
 }
+
+/* Các vấn đề cần sửa:
+* renderView() nên dùng require
+* Thiếu renderViewToString(): Hiện tại renderView() echo thẳng ra output nhưng cta sẽ có layout chung (header, footer, sidebar)
+* Thiếu method lấy input an toàn
+* isPost() có nhưng thiếu isGet() —> không nhất quán
+*/
