@@ -191,3 +191,9 @@ class CustomerModel extends BaseModel
         return array_map(fn($row) => new CustomerEntity($row), $rows);
     }
 }
+
+/* Các vấn đề cần sửa:
+* getAll() và getById() viết lại SQL thừa: BaseModel đã có sẵn getAll() và getById() với SQL y chang
+* registerGuest() có race condition: Khoảng thời gian giữa getByEmail() và insert() có thể xảy ra INSERT trùng nếu 2 request đồng thời
+* Thiếu paginate() cho trang admin: Trang quản lý customer của admin sẽ cần phân trang. BaseModel đã có sẵn paginate() nhưng trả về mảng thô nên override thêm
+*/
