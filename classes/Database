@@ -1,7 +1,0 @@
-CREATE TABLE promotions (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    code VARCHAR(50),
-    discount FLOAT,
-    type VARCHAR(20),
-    max_discount FLOAT
-);
