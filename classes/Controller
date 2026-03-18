@@ -1,0 +1,9 @@
+public function applyPromotion()
+{
+    $code = $_POST['code'] ?? '';
+    $total = $_POST['total'] ?? 0;
+
+    $result = $this->orderService->applyPromotion((float)$total, $code);
+
+    $this->jsonResponse($result);
+}
