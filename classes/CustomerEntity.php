@@ -194,3 +194,8 @@ class CustomerEntity
         return $json;
     }
 }
+
+/* Các vấn đề cần sửa:
+* $id mặc định 0 thay vì null: Khi tạo Entity từ form checkout, $id = 0 khiến code nơi khác không phân biệt được "chưa có ID" với "ID hợp lệ"
+* $userId = 0 cho guest: Giá trị 0 không tồn tại trong bảng users nên dễ gây lỗi FK constraint nếu DB strict
+*/
