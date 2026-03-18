@@ -1,0 +1,17 @@
+<script>
+function applyPromo(){
+    let code = document.getElementById("promo").value;
+    let total = document.getElementById("total").innerText;
+
+    fetch("index.php?action=applyPromotion", {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: "code=" + code + "&total=" + total
+    })
+    .then(res => res.json())
+    .then(data => {
+        alert(data.message);
+        document.getElementById("total").innerText = data.total;
+    });
+}
+</script>
