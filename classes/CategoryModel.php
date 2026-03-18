@@ -25,18 +25,6 @@ class CategoryModel extends BaseModel
     protected string $table = 'categories';
 
 
-    // CONSTRUCTOR
-
-    /**
-     * Gọi constructor của BaseModel để khởi tạo kết nối PDO
-     * và kiểm tra $table đã được khai báo.
-     */
-    public function __construct()
-    {
-        parent::__construct();
-    }
-
-
     // PHƯƠNG THỨC CHÍNH
 
     /**
@@ -80,10 +68,18 @@ class CategoryModel extends BaseModel
      *   // → trả về tất cả danh mục có tên chứa "RAM"
      *
      * @param  string         $keyword Từ khoá tìm kiếm.
-     * @return CategoryEntity[]        Mảng kết quả (rỗng nếu không tìm thấy).
+     * @return CategoryEntity[]        Mảng kết quả (rỗng nếu keyword rỗng hoặc không tìm thấy).
      */
     public function search(string $keyword): array
     {
+        // Trim trước, guard chuỗi rỗng sau khi trim
+        // → tránh trường hợp keyword = "   " trả về toàn bộ bảng
+        $keyword = trim($keyword);
+
+        if ($keyword === '') {
+            return [];
+        }
+
         $rows = $this->fetchAll(
             "SELECT * FROM {$this->table} WHERE name LIKE ? ORDER BY id DESC",
             ['%' . $keyword . '%']
@@ -151,24 +147,4 @@ class CategoryModel extends BaseModel
         ]);
     }
 
-    /**
-     * Xoá một danh mục theo ID.
-     *
-     * Lưu ý: Nên kiểm tra danh mục có sản phẩm liên kết không trước khi xoá
-     * để tránh lỗi foreign key constraint từ bảng products.
-     * Việc kiểm tra này nên được xử lý ở tầng Service.
-     *
-     * @param  int  $id
-     * @return bool     true nếu có ít nhất 1 dòng bị xoá.
-     */
-    public function delete(int $id): bool
-    {
-        return parent::delete($id);
-    }
 }
-
-/* Các vấn đề cần sửa:
- * search() không trim keyword và không guard chuỗi rỗng: nếu keyword rỗng sẽ trả toàn bộ bảng.
- * Constructor không cần override nếu chỉ gọi parent::__construct()
- * delete() cũng không cần override nếu không thêm logic
-*/
