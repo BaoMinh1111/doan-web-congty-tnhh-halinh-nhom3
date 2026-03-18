@@ -1,0 +1,45 @@
+<?php
+require_once "PromotionModel.php";
+
+class OrderService
+{
+    private PromotionModel $promotionModel;
+
+    public function __construct(PromotionModel $pm)
+    {
+        $this->promotionModel = $pm;
+    }
+
+    public function applyPromotion(float $total, string $code): array
+    {
+        $promotion = $this->promotionModel->getByCode($code);
+
+        if (!$promotion) {
+            return [
+                'total' => $total,
+                'discount' => 0,
+                'message' => 'Mã không hợp lệ'
+            ];
+        }
+
+        $discountValue = 0;
+
+        if ($promotion->getType() === 'percent') {
+            $discountValue = $total * ($promotion->getDiscount() / 100);
+
+            if ($promotion->getMaxDiscount() !== null) {
+                $discountValue = min($discountValue, $promotion->getMaxDiscount());
+            }
+        } else {
+            $discountValue = $promotion->getDiscount();
+        }
+
+        $finalTotal = max(0, $total - $discountValue);
+
+        return [
+            'total' => $finalTotal,
+            'discount' => $discountValue,
+            'message' => 'Áp dụng mã thành công'
+        ];
+    }
+}
