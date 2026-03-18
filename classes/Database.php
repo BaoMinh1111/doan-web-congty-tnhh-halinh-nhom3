@@ -2,10 +2,13 @@
 
 /**
  * Class Database
- * 
+ *
  * Lớp quản lý kết nối PDO duy nhất cho toàn bộ ứng dụng.
  * Áp dụng Singleton Pattern để đảm bảo chỉ có một instance tồn tại.
- * 
+ *
+ * Trách nhiệm duy nhất của lớp này: cung cấp và quản lý kết nối PDO.
+ * Xử lý transaction KHÔNG thuộc về lớp này — hãy dùng BaseModel::transaction().
+ *
  * @package App\Support
  * @author  Ha Linh Technology Solutions
  */
@@ -15,14 +18,14 @@ class Database
 
     /**
      * Instance duy nhất của lớp Database (Singleton).
-     * 
+     *
      * @var Database|null
      */
     private static ?Database $instance = null;
 
     /**
      * Đối tượng PDO thực sự dùng để truy vấn CSDL.
-     * 
+     *
      * @var PDO|null
      */
     private ?PDO $pdo = null;
@@ -30,7 +33,7 @@ class Database
     /**
      * Thông tin cấu hình kết nối CSDL.
      * Được nạp từ file config hoặc truyền vào lúc khởi tạo.
-     * 
+     *
      * @var array{host: string, dbname: string, user: string, pass: string, charset: string, port: int}
      */
     private array $config = [];
@@ -41,8 +44,8 @@ class Database
     /**
      * Constructor private – chỉ được gọi nội bộ qua getInstance().
      * Nạp cấu hình và khởi tạo kết nối PDO.
-     * 
-     * @param array $config Mảng cấu hình 
+     *
+     * @param array $config Mảng cấu hình
      * @throws RuntimeException Nếu kết nối CSDL thất bại.
      */
     private function __construct(array $config = [])
@@ -58,7 +61,7 @@ class Database
 
     /**
      * Ngăn unserialize object (vi phạm Singleton).
-     * 
+     *
      * @throws RuntimeException
      */
     public function __wakeup(): void
@@ -71,8 +74,8 @@ class Database
 
     /**
      * Trả về instance duy nhất của Database.
-     * Nếu chưa có thì tạo mới, nếu đã có thì trả về cái cũ
-     * 
+     * Nếu chưa có thì tạo mới, nếu đã có thì trả về cái cũ.
+     *
      * @param array $config Cấu hình kết nối (chỉ dùng lần đầu tạo instance).
      * @return Database Instance duy nhất.
      */
@@ -88,7 +91,7 @@ class Database
     /**
      * Reset instance (dùng cho unit test hoặc khi cần tạo lại kết nối).
      * KHÔNG dùng trong production.
-     * 
+     *
      * @return void
      */
     public static function resetInstance(): void
@@ -101,7 +104,12 @@ class Database
 
     /**
      * Khởi tạo kết nối PDO từ thông tin trong $this->config.
-     * 
+     *
+     * Các PDO option được chọn:
+     *   - ERRMODE_EXCEPTION    : ném PDOException khi có lỗi SQL → bắt được bằng try/catch
+     *   - EMULATE_PREPARES=false: dùng prepared statement thật thay vì giả lập → an toàn hơn
+     *   - ATTR_PERSISTENT=false : không dùng persistent connection → tránh lỗi trạng thái giữa các request
+     *
      * @throws RuntimeException Nếu kết nối thất bại (bắt PDOException).
      * @return void
      */
@@ -110,16 +118,15 @@ class Database
         $dsn = sprintf(
             'mysql:host=%s;port=%d;dbname=%s;charset=%s',
             $this->config['host'],
-            $this->config['port'] ?? 3306,
+            $this->config['port']    ?? 3306,
             $this->config['dbname'],
             $this->config['charset'] ?? 'utf8mb4'
         );
 
         $options = [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,   // Ném exception khi lỗi SQL
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,          // Mặc định fetch kiểu mảng kết hợp
-            PDO::ATTR_EMULATE_PREPARES   => false,                     // Dùng prepared statement thật (an toàn hơn)
-            PDO::ATTR_PERSISTENT         => false,                     // Không dùng persistent connection (tránh lỗi trạng thái)
+            PDO::ATTR_ERRMODE          => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_EMULATE_PREPARES => false,
+            PDO::ATTR_PERSISTENT       => false,
         ];
 
         try {
@@ -142,10 +149,10 @@ class Database
 
     /**
      * Trả về đối tượng PDO để các Model sử dụng truy vấn.
-     * 
+     *
      * Cách dùng trong BaseModel:
      *   $this->db = Database::getInstance()->getConnection();
-     * 
+     *
      * @return PDO
      * @throws RuntimeException Nếu PDO chưa được khởi tạo.
      */
@@ -160,8 +167,11 @@ class Database
 
     /**
      * Kiểm tra kết nối còn sống không (ping).
-     * Hữu ích khi ứng dụng chạy lâu và connection bị timeout.
-     * 
+     *
+     * Hữu ích cho các tiến trình chạy lâu (CLI script, queue worker)
+     * khi connection có thể bị MySQL timeout sau thời gian không hoạt động.
+     * Với web request bình thường (PHP tắt sau mỗi request) thì không cần dùng.
+     *
      * @return bool
      */
     public function isConnected(): bool
@@ -176,47 +186,13 @@ class Database
 
     /**
      * Kết nối lại nếu connection đã bị đứt.
-     * 
+     *
      * @return void
      */
     public function reconnect(): void
     {
         $this->pdo = null;
         $this->connect();
-    }
-
-
-    // TRANSACTION SUPPORT
-
-    /**
-     * Bắt đầu một transaction.
-     * Dùng khi cần thực thi nhiều câu lệnh SQL như một khối nguyên tử.
-     * 
-     * @return bool
-     */
-    public function beginTransaction(): bool
-    {
-        return $this->getConnection()->beginTransaction();
-    }
-
-    /**
-     * Xác nhận (commit) transaction.
-     * 
-     * @return bool
-     */
-    public function commit(): bool
-    {
-        return $this->getConnection()->commit();
-    }
-
-    /**
-     * Huỷ bỏ (rollback) transaction khi có lỗi.
-     * 
-     * @return bool
-     */
-    public function rollback(): bool
-    {
-        return $this->getConnection()->rollBack();
     }
 
 
@@ -227,9 +203,13 @@ class Database
      * Ưu tiên theo thứ tự:
      *   1. File config/database.php (nếu tồn tại)
      *   2. Hằng số PHP được định nghĩa trước (DB_HOST, DB_NAME, ...)
-     *   3. Giá trị mặc định localhost (chỉ dùng khi dev)
-     * 
+     *   3. Không có fallback mặc định → throw luôn
+     *
+     * Không có fallback credential mặc định để tránh vô tình deploy
+     * lên hosting thật mà không có file config.
+     *
      * @return array
+     * @throws RuntimeException Nếu không tìm thấy cấu hình hợp lệ.
      */
     private function loadConfig(): array
     {
@@ -238,6 +218,7 @@ class Database
         // để tránh lỗi khi cấu trúc thư mục thay đổi.
         $configFile = (defined('BASE_PATH') ? BASE_PATH : dirname(__DIR__, 2))
             . '/config/database.php';
+
         if (file_exists($configFile)) {
             $cfg = require $configFile;
             if (is_array($cfg)) {
@@ -257,7 +238,10 @@ class Database
             ];
 
             // Validate các trường bắt buộc – tránh kết nối với credential rỗng
-            $missing = array_filter(['DB_NAME' => $config['dbname'], 'DB_USER' => $config['user']], 'empty');
+            $missing = array_filter(
+                ['DB_NAME' => $config['dbname'], 'DB_USER' => $config['user']],
+                'empty'
+            );
             if (!empty($missing)) {
                 throw new RuntimeException(
                     'Cấu hình CSDL không đầy đủ. Các hằng số sau còn thiếu hoặc rỗng: '
@@ -268,9 +252,7 @@ class Database
             return $config;
         }
 
-        // Không có fallback credential mặc định.
-        // Nếu không tìm thấy config hợp lệ → throw luôn để dev biết ngay,
-        // tránh vô tình deploy lên hosting thật mà không có file config.
+        // Ưu tiên 3: Không có config → throw ngay để dev phát hiện sớm
         throw new RuntimeException(
             'Không tìm thấy cấu hình CSDL. ' .
             'Vui lòng tạo file config/database.php hoặc định nghĩa hằng số DB_HOST, DB_NAME, DB_USER, DB_PASS.'
