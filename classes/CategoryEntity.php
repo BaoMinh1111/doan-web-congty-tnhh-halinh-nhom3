@@ -104,8 +104,10 @@ class CategoryEntity
         // Validate name
         if (empty($this->name)) {
             $errors['name'] = 'Tên danh mục không được để trống.';
-        } elseif (mb_strlen($this->name) > 100) {
-            $errors['name'] = 'Tên danh mục không được vượt quá 100 ký tự.';
+        } elseif (mb_strlen($this->name) < 3) {
+            $errors['name'] = 'Tên danh mục phải có ít nhất 3 ký tự.';
+        } elseif (mb_strlen($this->name) > 255) {
+            $errors['name'] = 'Tên danh mục không được vượt quá 255 ký tự.';
         }
 
         // Validate description (không bắt buộc)
@@ -139,14 +141,18 @@ class CategoryEntity
      * Dùng cho AJAX response khi cần trả dữ liệu danh mục về client.
      *
      * @return string
+     * @throws RuntimeException Nếu json_encode thất bại.
      */
     public function toJson(): string
     {
-        return json_encode($this->toArray(), JSON_UNESCAPED_UNICODE);
+        $json = json_encode($this->toArray(), JSON_UNESCAPED_UNICODE);
+
+        if ($json === false) {
+            throw new RuntimeException(
+                'Không thể encode CategoryEntity sang JSON: ' . json_last_error_msg()
+            );
+        }
+
+        return $json;
     }
 }
-
-/* Các vấn đề cần sửa:
-* toJson() không check lỗi encode
-* validate() thiếu check độ dài tối thiểu cho name: ít nhất 3 kí tự, dài nhất 255 kí 
-*/
