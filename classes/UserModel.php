@@ -25,7 +25,7 @@ class UserModel extends BaseModel
     /**
      * Lấy tất cả người dùng, sắp xếp mới nhất trước.
      * Chỉ lấy các cột cần thiết, không lấy password_hash.
-     * 
+     *
      * @return UserEntity[]
      */
     public function getAll(): array
@@ -58,7 +58,7 @@ class UserModel extends BaseModel
      *
      * @param  UserEntity $user
      * @return int              ID của bản ghi vừa insert.
-     * @throws InvalidArgumentException Nếu entity không hợp lệ.
+     * @throws InvalidArgumentException Nếu entity không hợp lệ hoặc password chưa được hash.
      */
     public function insertEntity(UserEntity $user): int
     {
@@ -69,11 +69,19 @@ class UserModel extends BaseModel
             );
         }
 
+        // Kiểm tra passwordHash riêng — validate() không kiểm tra vì
+        // Entity có thể được tạo từ form (chưa hash) hoặc từ DB (đã hash).
+        if (empty($user->getPasswordHash())) {
+            throw new InvalidArgumentException(
+                'Mật khẩu chưa được hash. Vui lòng gọi setPassword() trước khi insert.'
+            );
+        }
+
         return $this->insert([
-            'username'      =>  $user ->getUsername(),
-            'password_hash' =>  $user ->getPassword_hash(),
-            'role'          =>  $user ->getRole(),
-            'email'         =>  $user ->getEmail(),
+            'username'      => $user->getUsername(),
+            'password_hash' => $user->getPasswordHash(),
+            'role'          => $user->getRole(),
+            'email'         => $user->getEmail(),
         ]);
     }
 
@@ -129,21 +137,21 @@ class UserModel extends BaseModel
         );
         return $row ? new UserEntity($row) : null;
     }
-    /** 
+
+    /**
      * Lấy tất cả người dùng có role 'admin'.
      * Không lấy password_hash.
      *
      * @return UserEntity[]
      */
-    public function findAdmins():array
+    public function findAdmins(): array
     {
-        $row = $this->fetchAll(
-            "SELECT id, username, role, email FROM {$this->$table) WHERE role = 'admin'
-            ORDER BY id ASC"
+        $rows = $this->fetchAll(
+            "SELECT id, username, role, email FROM {$this->table} WHERE role = 'admin' ORDER BY id ASC"
         );
-        return array_map(fn($row) =>new UserEntity($row), $rows);
+        return array_map(fn($row) => new UserEntity($row), $rows);
     }
-    
+
     /**
      * Kiểm tra username đã tồn tại chưa.
      * Truyền $excludeId khi đang update để tránh conflict với chính mình.
@@ -260,5 +268,3 @@ class UserModel extends BaseModel
         return array_map(fn($row) => new UserEntity($row), $rows);
     }
 }
-
-
