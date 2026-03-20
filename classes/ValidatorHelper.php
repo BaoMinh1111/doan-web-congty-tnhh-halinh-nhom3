@@ -281,3 +281,9 @@ class ValidatorHelper
         return $errors;
     }
 }
+
+/* Các vấn đề cần sửa:
+* validateQuantity() có logic sai: (int) $quantity != $quantity dùng != (loose comparison) thay vì !==
+* validateEmail() nên giới hạn 255 kí tự
+* sanitizeInput() không xử lý mảng lồng nhau
+*/
