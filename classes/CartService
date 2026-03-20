@@ -1,0 +1,179 @@
+<?php
+
+/**
+ * Class CartService
+ *
+ * Lớp dịch vụ xử lý logic giỏ hàng: thêm, xoá, cập nhật, tính tổng.
+ * Là lớp Service thuần túy, không phụ thuộc Controller.
+ * Quản lý dữ liệu giỏ hàng thông qua $_SESSION.
+ *
+ * @package App\Services
+ */
+class CartService
+{
+    // HẰNG SỐ
+
+    /**
+     * Key lưu giỏ hàng trong session
+     */
+    private const SESSION_CART = 'cart';
+
+
+    // CONSTRUCTOR
+
+    public function __construct()
+    {
+        $this->startSession();
+    }
+
+
+    // SESSION MANAGEMENT
+
+    private function startSession(): void
+    {
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+    }
+
+    private function getCart(): array
+    {
+        return $_SESSION[self::SESSION_CART] ?? [];
+    }
+
+    private function saveCart(array $cart): void
+    {
+        $_SESSION[self::SESSION_CART] = $cart;
+    }
+
+
+    // BUSINESS LOGIC
+
+    /**
+     * Lấy toàn bộ giỏ hàng
+     */
+    public function all(): array
+    {
+        return $this->getCart();
+    }
+
+    /**
+     * Thêm sản phẩm vào giỏ
+     */
+    public function add(int $productId, int $quantity = 1): array
+    {
+        if ($productId <= 0 || $quantity <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Dữ liệu không hợp lệ'
+            ];
+        }
+
+        $cart = $this->getCart();
+
+        if (isset($cart[$productId])) {
+            $cart[$productId]['quantity'] += $quantity;
+        } else {
+            $cart[$productId] = [
+                'product_id' => $productId,
+                'quantity'   => $quantity
+            ];
+        }
+
+        $this->saveCart($cart);
+
+        return [
+            'success' => true,
+            'message' => 'Thêm sản phẩm thành công'
+        ];
+    }
+
+    /**
+     * Xoá sản phẩm khỏi giỏ
+     */
+    public function remove(int $productId): array
+    {
+        $cart = $this->getCart();
+
+        if (!isset($cart[$productId])) {
+            return [
+                'success' => false,
+                'message' => 'Sản phẩm không tồn tại'
+            ];
+        }
+
+        unset($cart[$productId]);
+        $this->saveCart($cart);
+
+        return [
+            'success' => true,
+            'message' => 'Đã xoá sản phẩm'
+        ];
+    }
+
+    /**
+     * Cập nhật số lượng
+     */
+    public function update(int $productId, int $quantity): array
+    {
+        if ($quantity <= 0) {
+            return $this->remove($productId);
+        }
+
+        $cart = $this->getCart();
+
+        if (!isset($cart[$productId])) {
+            return [
+                'success' => false,
+                'message' => 'Sản phẩm không tồn tại'
+            ];
+        }
+
+        $cart[$productId]['quantity'] = $quantity;
+        $this->saveCart($cart);
+
+        return [
+            'success' => true,
+            'message' => 'Cập nhật thành công'
+        ];
+    }
+
+    /**
+     * Xoá toàn bộ giỏ hàng
+     */
+    public function clear(): void
+    {
+        unset($_SESSION[self::SESSION_CART]);
+    }
+
+    /**
+     * Tính tổng tiền (demo)
+     */
+    public function getTotal(): float
+    {
+        $cart = $this->getCart();
+        $total = 0;
+
+        foreach ($cart as $item) {
+            $price = 100; // mock
+            $total += $price * $item['quantity'];
+        }
+
+        return $total;
+    }
+
+    /**
+     * Tổng số lượng sản phẩm
+     */
+    public function count(): int
+    {
+        $cart = $this->getCart();
+        $count = 0;
+
+        foreach ($cart as $item) {
+            $count += $item['quantity'];
+        }
+
+        return $count;
+    }
+}
