@@ -1,0 +1,114 @@
+<?php
+
+require_once 'BaseController.php';
+require_once 'CartService.php';
+
+/**
+ * Class CartController
+ *
+ * Controller xử lý request liên quan đến giỏ hàng.
+ * Kế thừa BaseController để dùng renderView, jsonResponse, redirect.
+ *
+ * @package App\Controllers
+ */
+class CartController extends BaseController
+{
+    private CartService $cartService;
+
+
+    // CONSTRUCTOR
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->cartService = new CartService();
+    }
+
+
+    // VIEW
+
+    /**
+     * Hiển thị giỏ hàng
+     */
+    public function index(): void
+    {
+        $cart  = $this->cartService->all();
+        $total = $this->cartService->getTotal();
+
+        $this->renderView('cart/index', [
+            'cart'  => $cart,
+            'total' => $total
+        ]);
+    }
+
+
+    // ACTION
+
+    /**
+     * Thêm sản phẩm
+     */
+    public function add(): void
+    {
+        $productId = (int) $this->input('product_id');
+        $quantity  = (int) $this->input('quantity', 1);
+
+        $result = $this->cartService->add($productId, $quantity);
+
+        if ($this->isAjax()) {
+            $this->jsonResponse($result);
+        }
+
+        $this->redirect('/cart');
+    }
+
+    /**
+     * Xoá sản phẩm
+     */
+    public function remove(): void
+    {
+        $productId = (int) $this->input('product_id');
+
+        $result = $this->cartService->remove($productId);
+
+        if ($this->isAjax()) {
+            $this->jsonResponse($result);
+        }
+
+        $this->redirect('/cart');
+    }
+
+    /**
+     * Cập nhật số lượng
+     */
+    public function update(): void
+    {
+        $productId = (int) $this->input('product_id');
+        $quantity  = (int) $this->input('quantity');
+
+        $result = $this->cartService->update($productId, $quantity);
+
+        $this->jsonResponse($result);
+    }
+
+    /**
+     * Xoá toàn bộ giỏ
+     */
+    public function clear(): void
+    {
+        $this->cartService->clear();
+        $this->redirect('/cart');
+    }
+
+    /**
+     * Lấy tổng tiền (AJAX)
+     */
+    public function total(): void
+    {
+        $total = $this->cartService->getTotal();
+
+        $this->jsonResponse([
+            'success' => true,
+            'total'   => $total
+        ]);
+    }
+}
