@@ -25,17 +25,7 @@ class SessionHelper
     /**
      * Key lưu giỏ hàng trong session.
      */
-    private const KEY_CART    = 'cart';
-
-    /**
-     * Key lưu ID người dùng — phải khớp với AuthService::SESSION_USER_ID.
-     */
-    private const KEY_USER_ID = 'auth_user_id';
-
-    /**
-     * Key lưu role người dùng — phải khớp với AuthService::SESSION_ROLE.
-     */
-    private const KEY_ROLE    = 'auth_role';
+    private const KEY_CART = 'cart';
 
 
     // KHỞI ĐỘNG SESSION
@@ -127,8 +117,10 @@ class SessionHelper
         $cart = self::getCart();
 
         if (isset($cart[$productId])) {
-            // Sản phẩm đã tồn tại → cộng dồn số lượng
+            // Sản phẩm đã tồn tại → cộng dồn số lượng, cập nhật price theo giá mới nhất
+            // (tránh hiển thị sai tổng tiền nếu admin đã thay đổi giá sau khi khách thêm vào giỏ)
             $cart[$productId]['quantity'] += $quantity;
+            $cart[$productId]['price']     = $price;
         } else {
             // Thêm mới vào giỏ
             $cart[$productId] = [
@@ -242,8 +234,8 @@ class SessionHelper
     // TRẠNG THÁI ĐĂNG NHẬP – LOGIN
 
     /**
-     * Kiểm tra người dùng có đang đăng nhập không.
-     * Chỉ kiểm tra key có tồn tại — AuthService chịu trách nhiệm kiểm tra hết hạn.
+     * Kiểm tra người dùng có đang đăng nhập và session chưa hết hạn không.
+     * Dùng AuthService::SESSION_* để đọc key — không tự định nghĩa lại tránh lệch.
      *
      * Cách dùng:
      *   if (!SessionHelper::isLoggedIn()) { header('Location: /login'); exit; }
@@ -253,7 +245,18 @@ class SessionHelper
     public static function isLoggedIn(): bool
     {
         self::ensureStarted();
-        return !empty($_SESSION[self::KEY_USER_ID]);
+
+        if (empty($_SESSION[AuthService::SESSION_USER_ID])) {
+            return false;
+        }
+
+        // Kiểm tra hết hạn — nhất quán với AuthService::checkSession()
+        $loggedAt = $_SESSION[AuthService::SESSION_LOGGED_AT] ?? 0;
+        if ((time() - $loggedAt) > AuthService::SESSION_LIFETIME) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -266,7 +269,42 @@ class SessionHelper
      */
     public static function isAdmin(): bool
     {
-        self::ensureStarted();
-        return self::isLoggedIn() && ($_SESSION[self::KEY_ROLE] ?? '') === 'admin';
+        return self::isLoggedIn()
+            && ($_SESSION[AuthService::SESSION_ROLE] ?? '') === 'admin';
+    }
+
+
+    // GIỎ HÀNG – HELPER CHO VIEW
+
+    /**
+     * Trả về giỏ hàng dạng danh sách (indexed array) dùng được ngay trong View.
+     * Khác với getCart() trả mảng key là product_id,
+     * getCartItems() trả mảng đánh index từ 0 — phù hợp với foreach trong View
+     * mà không cần biết cấu trúc key bên trong.
+     *
+     * Mỗi phần tử gồm: product_id, quantity, price, subtotal (price × quantity).
+     *
+     * Cách dùng trong View:
+     *   foreach (SessionHelper::getCartItems() as $item) {
+     *       echo $item['product_id'] . ' - ' . $item['quantity'] . ' - ' . $item['subtotal'];
+     *   }
+     *
+     * @return array Danh sách item, mỗi item có thêm key 'subtotal'. Rỗng nếu giỏ trống.
+     */
+    public static function getCartItems(): array
+    {
+        $cart  = self::getCart();
+        $items = [];
+
+        foreach ($cart as $item) {
+            $items[] = [
+                'product_id' => (int)   $item['product_id'],
+                'quantity'   => (int)   $item['quantity'],
+                'price'      => (float) $item['price'],
+                'subtotal'   => (float) $item['price'] * (int) $item['quantity'],
+            ];
+        }
+
+        return $items;
     }
 }
