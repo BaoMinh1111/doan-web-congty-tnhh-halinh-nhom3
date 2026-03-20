@@ -22,29 +22,33 @@ class AuthService
 
     /**
      * Key lưu ID người dùng trong session.
+     * Khai báo public để SessionHelper có thể đọc mà không tự định nghĩa lại.
      */
-    private const SESSION_USER_ID   = 'auth_user_id';
+    public const SESSION_USER_ID   = 'auth_user_id';
 
     /**
      * Key lưu username trong session.
      */
-    private const SESSION_USERNAME  = 'auth_username';
+    public const SESSION_USERNAME  = 'auth_username';
 
     /**
      * Key lưu role trong session.
+     * Khai báo public để SessionHelper có thể đọc mà không tự định nghĩa lại.
      */
-    private const SESSION_ROLE      = 'auth_role';
+    public const SESSION_ROLE      = 'auth_role';
 
     /**
      * Key lưu thời điểm đăng nhập (Unix timestamp).
+     * Khai báo public để SessionHelper dùng kiểm tra hết hạn.
      */
-    private const SESSION_LOGGED_AT = 'auth_logged_at';
+    public const SESSION_LOGGED_AT = 'auth_logged_at';
 
     /**
      * Thời gian tồn tại tối đa của session (giây).
+     * Khai báo public để SessionHelper dùng kiểm tra hết hạn.
      * Mặc định: 2 giờ.
      */
-    private const SESSION_LIFETIME  = 7200;
+    public const SESSION_LIFETIME  = 7200;
 
 
     // THUỘC TÍNH
@@ -53,6 +57,14 @@ class AuthService
      * @var UserModel
      */
     private UserModel $userModel;
+
+    /**
+     * Cache kết quả checkSession() trong cùng 1 request.
+     * Tránh gọi lặp nhiều lần khi dùng nhiều getter liên tiếp.
+     *
+     * @var bool|null  null = chưa kiểm tra, true/false = kết quả đã cache.
+     */
+    private ?bool $sessionValid = null;
 
 
     // CONSTRUCTOR
@@ -136,6 +148,9 @@ class AuthService
         $_SESSION[self::SESSION_ROLE]      = $user->getRole();
         $_SESSION[self::SESSION_LOGGED_AT] = time();
 
+        // Invalidate cache để checkSession() tự đánh giá lại sau login
+        $this->sessionValid = null;
+
         return [
             'success' => true,
             'message' => 'Đăng nhập thành công.',
@@ -179,13 +194,10 @@ class AuthService
             ];
         }
 
-        // Tạo entity và validate các trường còn lại
+        // Tạo entity và validate các trường (username, email, role)
+        // validate() KHÔNG kiểm tra passwordHash — đúng vì chưa hash ở bước này
         $user   = new UserEntity($data);
         $errors = $user->validate();
-
-        // validate() kiểm tra password_hash rỗng — nhưng ở đây ta chưa hash
-        // nên bỏ qua lỗi password_hash, chỉ giữ lỗi các trường khác
-        unset($errors['password_hash']);
 
         if (!empty($errors)) {
             return [
@@ -195,7 +207,9 @@ class AuthService
             ];
         }
 
-        // Kiểm tra username và email chưa tồn tại
+        // Kiểm tra trước để trả lỗi thân thiện với người dùng.
+        // Lưu ý: đây chỉ là lớp UX — race condition vẫn được xử lý
+        // bằng try/catch PDOException bên dưới (lớp bảo vệ thực sự).
         if ($this->userModel->isUsernameTaken($user->getUsername())) {
             return [
                 'success' => false,
@@ -223,8 +237,20 @@ class AuthService
             ];
         }
 
-        // Lưu vào DB
-        $newId = $this->userModel->insertEntity($user);
+        // Lưu vào DB — bắt race condition nếu 2 request insert cùng lúc
+        try {
+            $newId = $this->userModel->insertEntity($user);
+        } catch (RuntimeException $e) {
+            // PDOException error code 23000 = Duplicate entry (username/email trùng)
+            if (str_contains($e->getMessage(), '23000')) {
+                return [
+                    'success' => false,
+                    'message' => 'Tên đăng nhập hoặc email đã tồn tại.',
+                    'userId'  => null,
+                ];
+            }
+            throw $e; // Lỗi DB khác → ném lại để xử lý ở tầng trên
+        }
 
         return [
             'success' => true,
@@ -238,6 +264,8 @@ class AuthService
 
     /**
      * Kiểm tra người dùng có đang đăng nhập hợp lệ không.
+     * Kết quả được cache trong $sessionValid để tránh gọi lặp nhiều lần
+     * khi dùng nhiều getter (getSessionUserId, isAdmin, ...) trong cùng 1 request.
      *
      * Quy trình kiểm tra:
      *   1. Session phải có đủ các key bắt buộc.
@@ -250,6 +278,11 @@ class AuthService
      */
     public function checkSession(): bool
     {
+        // Trả về cache nếu đã kiểm tra trong request này
+        if ($this->sessionValid !== null) {
+            return $this->sessionValid;
+        }
+
         // Kiểm tra các key bắt buộc có tồn tại không
         if (
             empty($_SESSION[self::SESSION_USER_ID])   ||
@@ -257,16 +290,16 @@ class AuthService
             empty($_SESSION[self::SESSION_ROLE])      ||
             !isset($_SESSION[self::SESSION_LOGGED_AT])
         ) {
-            return false;
+            return $this->sessionValid = false;
         }
 
         // Kiểm tra session có hết hạn chưa
         if ((time() - $_SESSION[self::SESSION_LOGGED_AT]) > self::SESSION_LIFETIME) {
-            $this->logout(); // Tự động xoá session hết hạn
-            return false;
+            $this->logout();
+            return $this->sessionValid = false;
         }
 
-        return true;
+        return $this->sessionValid = true;
     }
 
     /**
@@ -345,6 +378,9 @@ class AuthService
             $_SESSION[self::SESSION_ROLE],
             $_SESSION[self::SESSION_LOGGED_AT]
         );
+
+        // Reset cache
+        $this->sessionValid = null;
 
         // Xoá cookie session trên trình duyệt
         if (ini_get('session.use_cookies')) {
