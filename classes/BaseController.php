@@ -76,7 +76,9 @@ abstract class BaseController
         // Đưa các key của $data thành biến cục bộ trong scope của view
         extract($data, EXTR_SKIP);
 
-        include $filePath;
+        // Dùng require thay vì include: view là bắt buộc,
+        // không có thì dừng hẳn thay vì tiếp tục chạy với output thiếu.
+        require $filePath;
     }
 
 
@@ -138,6 +140,86 @@ abstract class BaseController
     // TIỆN ÍCH BỔ SUNG
 
     /**
+     * Render file view thành chuỗi và trả về thay vì echo thẳng.
+     * Dùng để nhúng nội dung view vào layout chung (header, footer, sidebar).
+     *
+     * Cách dùng điển hình với layout:
+     *   // Trong Controller:
+     *   $content = $this->renderViewToString('products/list', ['products' => $products]);
+     *   $this->renderView('layouts/main', ['content' => $content, 'title' => 'Sản phẩm']);
+     *
+     *   // Trong views/layouts/main.php:
+     *   <?php require 'partials/header.php'; ?>
+     *   <main><?= $content ?></main>
+     *   <?php require 'partials/footer.php'; ?>
+     *
+     * @param  string $view Đường dẫn file view tương đối từ viewPath, không cần đuôi .php.
+     * @param  array  $data Mảng dữ liệu truyền vào view.
+     * @return string       Nội dung HTML đã render.
+     * @throws RuntimeException Nếu file view không tồn tại.
+     */
+    protected function renderViewToString(string $view, array $data = []): string
+    {
+        $filePath = $this->viewPath . ltrim($view, '/') . '.php';
+
+        if (!file_exists($filePath)) {
+            throw new RuntimeException(
+                "Không tìm thấy file view: {$filePath}"
+            );
+        }
+
+        extract($data, EXTR_SKIP);
+
+        // Bật output buffer để bắt toàn bộ output của view thành chuỗi
+        ob_start();
+        require $filePath;
+        return (string) ob_get_clean();
+    }
+
+
+    // LẤY INPUT AN TOÀN
+
+    /**
+     * Lấy và sanitize giá trị từ $_POST.
+     * Trả về giá trị mặc định nếu key không tồn tại.
+     *
+     * Cách dùng:
+     *   $username = $this->post('username');           // chuỗi rỗng nếu không có
+     *   $note     = $this->post('note', 'Không có');   // giá trị mặc định tuỳ chỉnh
+     *
+     * @param  string $key     Tên key trong $_POST.
+     * @param  mixed  $default Giá trị mặc định nếu key không tồn tại.
+     * @return mixed           Giá trị đã sanitize (nếu là string) hoặc giá trị gốc.
+     */
+    protected function post(string $key, mixed $default = ''): mixed
+    {
+        $value = $_POST[$key] ?? $default;
+        return is_string($value)
+            ? ValidatorHelper::sanitizeInput($value)
+            : $value;
+    }
+
+    /**
+     * Lấy và sanitize giá trị từ $_GET.
+     * Trả về giá trị mặc định nếu key không tồn tại.
+     *
+     * Cách dùng:
+     *   $keyword    = $this->get('q');         // chuỗi tìm kiếm
+     *   $categoryId = $this->get('cat', 0);    // ID danh mục, mặc định 0
+     *
+     * @param  string $key     Tên key trong $_GET.
+     * @param  mixed  $default Giá trị mặc định nếu key không tồn tại.
+     * @return mixed           Giá trị đã sanitize (nếu là string) hoặc giá trị gốc.
+     */
+    protected function get(string $key, mixed $default = ''): mixed
+    {
+        $value = $_GET[$key] ?? $default;
+        return is_string($value)
+            ? ValidatorHelper::sanitizeInput($value)
+            : $value;
+    }
+
+    /**
      * Kiểm tra request hiện tại có phải AJAX không.
      * Dùng để Controller quyết định trả về JSON hay render view.
      *
@@ -164,6 +246,16 @@ abstract class BaseController
     protected function getMethod(): string
     {
         return strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    }
+
+    /**
+     * Kiểm tra request hiện tại có phải GET không.
+     *
+     * @return bool
+     */
+    protected function isGet(): bool
+    {
+        return $this->getMethod() === 'GET';
     }
 
     /**
