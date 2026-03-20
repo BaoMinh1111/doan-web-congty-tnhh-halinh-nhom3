@@ -45,6 +45,9 @@ class ValidatorHelper
 
     /**
      * Kiểm tra địa chỉ email hợp lệ.
+     * Áp dụng 2 lớp kiểm tra:
+     *   1. Chuẩn RFC 5321: email tối đa 254 ký tự, đúng định dạng.
+     *   2. Giới hạn DB: cột email varchar(100) trong bảng users / customers.
      *
      * Cách dùng:
      *   $result = ValidatorHelper::validateEmail('lananh@gmail.com');
@@ -54,15 +57,26 @@ class ValidatorHelper
      */
     public static function validateEmail(mixed $email): true|string
     {
-        if (empty(trim((string) $email))) {
+        $email = trim((string) $email);
+
+        if (empty($email)) {
             return 'Email không được để trống.';
         }
+
+        // Lớp 1: chuẩn RFC 5321 — email tối đa 254 ký tự
+        if (mb_strlen($email) > 254) {
+            return 'Email không được vượt quá 254 ký tự (chuẩn RFC 5321).';
+        }
+
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return 'Email không hợp lệ.';
         }
-        if (mb_strlen((string) $email) > 100) {
+
+        // Lớp 2: giới hạn cột DB varchar(100) trong bảng users / customers
+        if (mb_strlen($email) > 100) {
             return 'Email không được vượt quá 100 ký tự.';
         }
+
         return true;
     }
 
@@ -88,6 +102,8 @@ class ValidatorHelper
 
     /**
      * Kiểm tra số lượng hợp lệ: là số nguyên và lớn hơn 0.
+     * Dùng filter_var() + so sánh === để phân biệt chính xác số nguyên
+     * với float dạng "3.0" hay chuỗi có ký tự thừa.
      *
      * Cách dùng:
      *   $result = ValidatorHelper::validateQuantity(2);
@@ -97,7 +113,8 @@ class ValidatorHelper
      */
     public static function validateQuantity(mixed $quantity): true|string
     {
-        if (!is_numeric($quantity) || (int) $quantity != $quantity) {
+        // filter_var với FILTER_VALIDATE_INT trả false nếu không phải số nguyên hợp lệ
+        if (filter_var($quantity, FILTER_VALIDATE_INT) === false) {
             return 'Số lượng phải là số nguyên.';
         }
         if ((int) $quantity <= 0) {
@@ -175,24 +192,28 @@ class ValidatorHelper
     // SANITIZE – làm sạch dữ liệu đầu vào
 
     /**
-     * Làm sạch một chuỗi hoặc mảng chuỗi đầu vào từ người dùng.
+     * Làm sạch một chuỗi hoặc mảng đầu vào từ người dùng (hỗ trợ mảng lồng nhau).
      * Áp dụng: trim() + htmlspecialchars() để chống XSS.
+     * Xử lý đệ quy nếu gặp phần tử là mảng lồng bên trong.
      * Không dùng cho mật khẩu (không nên encode mật khẩu trước khi hash).
      *
      * Cách dùng:
-     *   $name  = ValidatorHelper::sanitizeInput($_POST['name']);         // chuỗi
-     *   $data  = ValidatorHelper::sanitizeInput($_POST);                 // mảng
+     *   $name    = ValidatorHelper::sanitizeInput($_POST['name']);   // chuỗi
+     *   $data    = ValidatorHelper::sanitizeInput($_POST);           // mảng phẳng
+     *   $address = ValidatorHelper::sanitizeInput($_POST['address']); // mảng lồng nhau
      *
-     * @param  string|array $data Chuỗi hoặc mảng cần làm sạch.
+     * @param  string|array $data Chuỗi hoặc mảng (có thể lồng nhiều cấp) cần làm sạch.
      * @return string|array       Dữ liệu đã được làm sạch, cùng kiểu với đầu vào.
      */
     public static function sanitizeInput(string|array $data): string|array
     {
         if (is_array($data)) {
             return array_map(
-                fn($item) => is_string($item)
-                    ? htmlspecialchars(trim($item), ENT_QUOTES, 'UTF-8')
-                    : $item,
+                fn($item) => is_array($item)
+                    ? self::sanitizeInput($item)                              // đệ quy cho mảng lồng
+                    : (is_string($item)
+                        ? htmlspecialchars(trim($item), ENT_QUOTES, 'UTF-8') // làm sạch chuỗi
+                        : $item),                                             // giữ nguyên các kiểu khác (int, float, bool)
                 $data
             );
         }
