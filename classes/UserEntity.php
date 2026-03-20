@@ -158,6 +158,10 @@ class UserEntity
      *   - email: không được rỗng, đúng định dạng, không vượt quá 100 ký tự.
      *   - role: phải là 'admin' hoặc 'user'.
      *
+     * Lưu ý: KHÔNG kiểm tra passwordHash ở đây vì validate() được dùng
+     * cả khi tạo mới (chưa hash) lẫn khi cập nhật. Việc đảm bảo passwordHash
+     * không rỗng trước khi insert là trách nhiệm của UserModel::insertEntity().
+     *
      * Cách dùng:
      *   $errors = $user->validate();
      *   if (!empty($errors)) { // hiển thị lỗi }
@@ -171,8 +175,8 @@ class UserEntity
         // Validate username
         if (empty($this->username)) {
             $errors['username'] = 'Tên đăng nhập không được để trống.';
-        } elseif (mb_strlen($this->username)<3) {
-            $errors['username'] = 'Tên đăng nhập không được ít hơn 3 ký tự';
+        } elseif (mb_strlen($this->username) < 3) {
+            $errors['username'] = 'Tên đăng nhập phải có ít nhất 3 ký tự.';
         } elseif (mb_strlen($this->username) > 50) {
             $errors['username'] = 'Tên đăng nhập không được vượt quá 50 ký tự.';
         } elseif (!preg_match('/^[a-zA-Z0-9_\-]+$/', $this->username)) {
@@ -186,11 +190,6 @@ class UserEntity
             $errors['email'] = 'Email không hợp lệ.';
         } elseif (mb_strlen($this->email) > 100) {
             $errors['email'] = 'Email không được vượt quá 100 ký tự.';
-        }
-
-        // Validate password_hash (bắt buộc phải có trước khi lưu vào CSDL)
-        if (empty($this->passwordHash)) {
-            $errors['password_hash'] = 'Mật khẩu chưa được thiết lập. Vui lòng gọi setPassword() trước khi lưu.';
         }
 
         // Validate role
@@ -245,13 +244,11 @@ class UserEntity
     public function toJson(): string
     {
         $json = json_encode($this->toPublicArray(), JSON_UNESCAPED_UNICODE);
-        if ($json===false){
+        if ($json === false) {
             throw new RuntimeException(
-                'Không thể di chuyển UserEntity sang JSON: '.json_last_error_msg()
+                'Không thể chuyển UserEntity sang JSON: ' . json_last_error_msg()
             );
         }
         return $json;
     }
 }
-
-
