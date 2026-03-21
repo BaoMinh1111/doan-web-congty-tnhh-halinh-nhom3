@@ -1,0 +1,148 @@
+<?php
+
+/**
+ * Class OrderItemEntity
+ *
+ * Đại diện cho từng sản phẩm trong đơn hàng.
+ * Mỗi OrderItem thuộc về một Order.
+ *
+ * @package App\Entities
+ */
+class OrderItemEntity
+{
+    // ================= THUỘC TÍNH =================
+
+    private ?int $id;
+    private int $order_id;
+    private int $product_id;
+    private int $quantity;
+    private float $price;
+
+
+    // ================= CONSTRUCTOR =================
+
+    /**
+     * Khởi tạo từ mảng data
+     */
+    public function __construct(array $data = [])
+    {
+        $this->id         = $data['id'] ?? null;
+        $this->order_id   = (int) ($data['order_id'] ?? 0);
+        $this->product_id = (int) ($data['product_id'] ?? 0);
+        $this->quantity   = (int) ($data['quantity'] ?? 1);
+        $this->price      = (float) ($data['price'] ?? 0);
+    }
+
+
+    // ================= GETTER =================
+
+    public function getId(): ?int
+    {
+        return $this->id;
+    }
+
+    public function getOrderId(): int
+    {
+        return $this->order_id;
+    }
+
+    public function getProductId(): int
+    {
+        return $this->product_id;
+    }
+
+    public function getQuantity(): int
+    {
+        return $this->quantity;
+    }
+
+    public function getPrice(): float
+    {
+        return $this->price;
+    }
+
+    /**
+     * Tổng tiền của item = price * quantity
+     */
+    public function getSubtotal(): float
+    {
+        return $this->price * $this->quantity;
+    }
+
+
+    // ================= SETTER =================
+
+    public function setOrderId(int $order_id): void
+    {
+        $this->order_id = $order_id;
+    }
+
+    public function setProductId(int $product_id): void
+    {
+        $this->product_id = $product_id;
+    }
+
+    public function setQuantity(int $quantity): void
+    {
+        if ($quantity <= 0) {
+            throw new InvalidArgumentException("Số lượng phải > 0");
+        }
+
+        $this->quantity = $quantity;
+    }
+
+    public function setPrice(float $price): void
+    {
+        if ($price < 0) {
+            throw new InvalidArgumentException("Giá không hợp lệ");
+        }
+
+        $this->price = $price;
+    }
+
+
+    // ================= VALIDATE =================
+
+    /**
+     * Validate dữ liệu trước khi lưu DB
+     */
+    public function validate(): array
+    {
+        $errors = [];
+
+        if ($this->order_id <= 0) {
+            $errors['order_id'] = 'Order không hợp lệ';
+        }
+
+        if ($this->product_id <= 0) {
+            $errors['product_id'] = 'Sản phẩm không hợp lệ';
+        }
+
+        if ($this->quantity <= 0) {
+            $errors['quantity'] = 'Số lượng phải > 0';
+        }
+
+        if ($this->price < 0) {
+            $errors['price'] = 'Giá phải >= 0';
+        }
+
+        return $errors;
+    }
+
+
+    // ================= TO ARRAY =================
+
+    /**
+     * Chuyển object → array (để insert DB)
+     */
+    public function toArray(): array
+    {
+        return [
+            'id'         => $this->id,
+            'order_id'   => $this->order_id,
+            'product_id' => $this->product_id,
+            'quantity'   => $this->quantity,
+            'price'      => $this->price
+        ];
+    }
+}
