@@ -308,10 +308,3 @@ class SessionHelper
         return $items;
     }
 }
-
-/* Các vấn đề cần sửa:
-* key session hard-code trùng với AuthService nhưng không liên kết
-* addToCart() không cập nhật price khi sản phẩm đã tồn tại: Nếu admin thay đổi giá sản phẩm trong lúc khách đang có trong giỏ, lần thêm sau vẫn giữ giá cũ.
-* isLoggedIn() và isAdmin() không kiểm tra hết hạn session
-* Thiếu getCartItems() trả về mảng có thể dùng được ngay trong View
-*/
