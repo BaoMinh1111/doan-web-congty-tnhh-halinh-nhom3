@@ -9,8 +9,8 @@ require_once __DIR__ . '/CustomerEntity.php';
  * Kế thừa BaseModel → tái sử dụng $db, fetchAll(), fetchOne(), insert(), update().
  *
  * Hỗ trợ 2 luồng khách hàng:
- *   - Có tài khoản : registerGuest() + liên kết userId sau khi đăng ký.
- *   - Vãng lai     : registerGuest() với userId = 0, chỉ lưu thông tin giao hàng.
+ *   - Có tài khoản : registerGuest() với user_id hợp lệ.
+ *   - Vãng lai     : registerGuest() với user_id = null, chỉ lưu thông tin giao hàng.
  *
  * Bảng tương ứng: customers
  * Quan hệ: One-to-Many với bảng orders (một customer có nhiều đơn hàng).
@@ -27,31 +27,28 @@ class CustomerModel extends BaseModel
 
     /**
      * Lấy tất cả khách hàng, mới nhất trước.
-     * Dùng cho trang quản lý customer của Admin.
+     * Override BaseModel::getAll() để wrap kết quả thành CustomerEntity thay vì mảng thô.
      *
      * @return CustomerEntity[]
      */
     public function getAll(): array
     {
-        $rows = $this->fetchAll(
-            "SELECT * FROM {$this->table} ORDER BY id DESC"
+        return array_map(
+            fn($row) => new CustomerEntity($row),
+            parent::getAll()
         );
-
-        return array_map(fn($row) => new CustomerEntity($row), $rows);
     }
 
     /**
      * Lấy một khách hàng theo ID.
+     * Override BaseModel::getById() để trả về CustomerEntity thay vì mảng thô.
      *
      * @param  int                 $id
      * @return CustomerEntity|null
      */
     public function getById(int $id): ?CustomerEntity
     {
-        $row = $this->fetchOne(
-            "SELECT * FROM {$this->table} WHERE id = ?",
-            [$id]
-        );
+        $row = parent::getById($id);
 
         return $row ? new CustomerEntity($row) : null;
     }
@@ -101,14 +98,21 @@ class CustomerModel extends BaseModel
     /**
      * Lưu thông tin khách hàng khi đặt hàng.
      * Dùng cho CẢ 2 luồng:
-     *   - Khách vãng lai  : truyền $data không có 'user_id' (hoặc user_id = 0).
-     *   - Khách có tài khoản: truyền $data kèm 'user_id' hợp lệ.
+     *   - Khách vãng lai    : truyền $data không có 'user_id' → lưu NULL vào DB, tránh FK constraint.
+     *   - Khách có tài khoản: truyền $data kèm 'user_id' hợp lệ → lưu FK bình thường.
      *
-     * Nếu email đã tồn tại trong bảng → trả về ID cũ, không INSERT trùng.
+     * Xử lý race condition bằng INSERT ... ON DUPLICATE KEY UPDATE:
+     *   - Nếu email chưa tồn tại → INSERT bình thường, trả về lastInsertId.
+     *   - Nếu email đã tồn tại (kể cả 2 request đồng thời) → DB tự UPDATE `name`,
+     *     không INSERT trùng, sau đó SELECT lấy ID hiện có.
+     *   → Toàn bộ là 1 câu SQL atomic, không có khoảng hở race condition.
+     *
+     * Yêu cầu: cột `email` trong bảng customers phải có UNIQUE constraint.
      *
      * @param  array $data Mảng thông tin giao hàng từ form checkout.
      * @return int         ID của customer (mới hoặc đã tồn tại).
      * @throws InvalidArgumentException Nếu dữ liệu không hợp lệ.
+     * @throws RuntimeException         Nếu không lấy được ID sau khi upsert.
      */
     public function registerGuest(array $data): int
     {
@@ -121,20 +125,38 @@ class CustomerModel extends BaseModel
             );
         }
 
-        // Nếu email đã tồn tại → trả về ID cũ, tránh INSERT trùng
-        $existing = $this->getByEmail($entity->getEmail());
-        if ($existing !== null) {
-            return $existing->getId();
+        // INSERT ... ON DUPLICATE KEY UPDATE → atomic, không có race condition
+        // Khi email trùng: DB update `name` (no-op thực chất), giữ nguyên bản ghi cũ.
+        // LAST_INSERT_ID() trả về 0 nếu không có INSERT mới → cần SELECT thêm.
+        $this->prepareStmt(
+            "INSERT INTO {$this->table} (name, email, phone, address, user_id, note)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE name = VALUES(name)",
+            [
+                $entity->getName(),
+                $entity->getEmail(),
+                $entity->getPhone(),
+                $entity->getAddress(),
+                $entity->getUserId(), // null cho guest
+                $entity->getNote(),
+            ]
+        );
+
+        // lastInsertId() > 0 → vừa INSERT mới
+        // lastInsertId() = 0 → email đã tồn tại (ON DUPLICATE KEY chạy) → SELECT lấy ID
+        $lastId = (int) $this->db->lastInsertId();
+
+        if ($lastId > 0) {
+            return $lastId;
         }
 
-        return $this->insert([
-            'name'    => $entity->getName(),
-            'email'   => $entity->getEmail(),
-            'phone'   => $entity->getPhone(),
-            'address' => $entity->getAddress(),
-            'user_id' => $entity->getUserId(), // 0 nếu vãng lai
-            'note'    => $entity->getNote(),
-        ]);
+        // Email đã tồn tại → lấy ID hiện có
+        $existing = $this->getByEmail($entity->getEmail());
+
+        return $existing?->getId()
+            ?? throw new RuntimeException(
+                'Không thể lấy ID customer sau upsert với email: ' . $entity->getEmail()
+            );
     }
 
     /**
@@ -167,6 +189,27 @@ class CustomerModel extends BaseModel
     }
 
     /**
+     * Lấy danh sách khách hàng theo trang — dùng cho trang admin quản lý customer.
+     * Override BaseModel::paginate() để wrap kết quả thành CustomerEntity[].
+     *
+     * Cách dùng:
+     *   $customers = $customerModel->paginate(page: 2, limit: 15);
+     *   // → trả về CustomerEntity[] của trang 2, mỗi trang 15 bản ghi
+     *
+     * @param  int              $page  Trang hiện tại (bắt đầu từ 1).
+     * @param  int              $limit Số bản ghi mỗi trang (1–100).
+     * @return CustomerEntity[]
+     * @throws InvalidArgumentException Nếu $page hoặc $limit không hợp lệ (từ BaseModel).
+     */
+    public function paginate(int $page = 1, int $limit = 15): array
+    {
+        return array_map(
+            fn($row) => new CustomerEntity($row),
+            parent::paginate($page, $limit)
+        );
+    }
+
+    /**
      * Tìm kiếm khách hàng theo tên hoặc email (LIKE, gần đúng).
      * Dùng cho trang quản lý customer của Admin.
      *
@@ -191,9 +234,3 @@ class CustomerModel extends BaseModel
         return array_map(fn($row) => new CustomerEntity($row), $rows);
     }
 }
-
-/* Các vấn đề cần sửa:
-* getAll() và getById() viết lại SQL thừa: BaseModel đã có sẵn getAll() và getById() với SQL y chang
-* registerGuest() có race condition: Khoảng thời gian giữa getByEmail() và insert() có thể xảy ra INSERT trùng nếu 2 request đồng thời
-* Thiếu paginate() cho trang admin: Trang quản lý customer của admin sẽ cần phân trang. BaseModel đã có sẵn paginate() nhưng trả về mảng thô nên override thêm
-*/
