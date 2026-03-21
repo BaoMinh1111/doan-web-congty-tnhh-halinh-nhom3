@@ -234,3 +234,10 @@ class CustomerModel extends BaseModel
         return array_map(fn($row) => new CustomerEntity($row), $rows);
     }
 }
+
+/* Các vấn đề cần sửa:
+* paginate() override trả CustomerEntity[] nhưng gọi parent::paginate() trả về mảng có key 'data', 'total', 'totalPages'... — wrap sai kiểu
+* getOrdersByCustomerId() trả mảng thô trong khi các method khác trả Entity
+* updateInfo() có thể đổi email thành email đã tồn tại của customer khác: ktra có trùng email 
+* registerGuest() cập nhật name khi email trùng — có thể ghi đè tên cũ không mong muốn
+*/
