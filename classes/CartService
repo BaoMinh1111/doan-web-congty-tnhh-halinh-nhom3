@@ -177,3 +177,14 @@ class CartService
         return $count;
     }
 }
+
+/* Các vấn đề cần sửa:
+* getTotal() dùng giá mock cứng $price = 100 — không lấy giá thật từ DB: Tổng tiền luôn sai so với giá thật. 
+CartService cần nhận ProductModel qua constructor để lấy giá — hoặc lưu giá vào session lúc add()
+* add() không lưu tên và giá sản phẩm vào session — giỏ hàng chỉ có product_id và quantity: Khi render giỏ hàng, View không có tên sản phẩm hay giá để hiển thị. 
+Cần query DB mỗi lần load, hoặc lưu snapshot giá lúc add — snapshot an toàn hơn vì giá có thể thay đổi.
+* add() không kiểm tra $productId có tồn tại trong DB không: Người dùng có thể thêm product_id=9999 không có thật vào giỏ
+* add() không giới hạn số lượng tối đa — có thể thêm quantity=999999:  nên đặt giới hạn cứng trước ($quantity > 100 thì từ chối) 
+để tránh dữ liệu vô lý trong session.
+* startSession() trong constructor — Service không nên tự quản lý session: Service gọi session_start() làm khó test và vi phạm Single Responsibility.
+*/
