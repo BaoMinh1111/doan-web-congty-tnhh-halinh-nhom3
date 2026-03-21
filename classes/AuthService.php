@@ -400,9 +400,3 @@ class AuthService
         session_destroy();
     }
 }
-
-/* Các vấn đề cần sửa:
-* checkSession() gọi lặp nhiều lần không cần thiết 
-* unset($errors['password_hash']): Đây là dấu hiệu UserEntity::validate() đang validate password_hash — nhưng ở bước register thì chưa hash
-* register() có race condition 
-*/
