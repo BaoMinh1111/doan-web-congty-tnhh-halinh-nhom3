@@ -9,8 +9,8 @@
  *   - Vãng lai (guest): không cần tài khoản, chỉ điền thông tin giao hàng khi đặt.
  *
  * Phân biệt bằng thuộc tính $userId:
- *   - $userId > 0  → khách có tài khoản (liên kết bảng users)
- *   - $userId = 0  → khách vãng lai
+ *   - $userId = int  → khách có tài khoản (liên kết bảng users)
+ *   - $userId = null → khách vãng lai (không liên kết users, tránh FK constraint)
  *
  * @package App\Entities
  * @author  Ha Linh Technology Solutions
@@ -19,8 +19,14 @@ class CustomerEntity
 {
     // THUỘC TÍNH
 
-    /** @var int ID khách hàng (primary key bảng customers) */
-    private int $id;
+    /**
+     * ID khách hàng (primary key bảng customers).
+     * null khi Entity được tạo từ form (chưa INSERT vào DB).
+     * int  khi Entity được lấy từ DB (đã có ID thật).
+     *
+     * @var int|null
+     */
+    private ?int $id;
 
     /** @var string Họ tên khách hàng */
     private string $name;
@@ -36,11 +42,12 @@ class CustomerEntity
 
     /**
      * FK liên kết bảng users.
-     * = 0 nếu là khách vãng lai (guest).
+     * null nếu là khách vãng lai — tránh FK constraint với bảng users.
+     * int  nếu là khách có tài khoản.
      *
-     * @var int
+     * @var int|null
      */
-    private int $userId;
+    private ?int $userId;
 
     /** @var string Ghi chú thêm của khách (tùy chọn) */
     private string $note;
@@ -52,44 +59,49 @@ class CustomerEntity
      * Khởi tạo CustomerEntity từ mảng dữ liệu.
      *
      * Cách dùng:
-     *   // Khách có tài khoản
+     *   // Khách có tài khoản (từ DB)
      *   $customer = new CustomerEntity($rowFromDb);
      *
-     *   // Khách vãng lai (từ form checkout)
-     *   $customer = new CustomerEntity($_POST);  // userId sẽ tự = 0
+     *   // Khách vãng lai (từ form checkout) — id và user_id tự động = null
+     *   $customer = new CustomerEntity($_POST);
      *
      * @param array $data Mảng dữ liệu với các key: id, name, email, phone, address, user_id, note.
      */
     public function __construct(array $data)
     {
-        $this->id      = isset($data['id'])      ? (int)    $data['id']              : 0;
-        $this->name    = isset($data['name'])    ? (string) trim($data['name'])      : '';
-        $this->email   = isset($data['email'])   ? (string) trim($data['email'])     : '';
-        $this->phone   = isset($data['phone'])   ? (string) trim($data['phone'])     : '';
-        $this->address = isset($data['address']) ? (string) trim($data['address'])   : '';
-        $this->userId  = isset($data['user_id']) ? (int)    $data['user_id']         : 0;
-        $this->note    = isset($data['note'])    ? (string) trim($data['note'])      : '';
+        // null khi chưa có trong DB (tạo từ form), int khi lấy từ DB
+        $this->id      = isset($data['id'])      ? (int)    $data['id']            : null;
+        $this->name    = isset($data['name'])    ? (string) trim($data['name'])    : '';
+        $this->email   = isset($data['email'])   ? (string) trim($data['email'])   : '';
+        $this->phone   = isset($data['phone'])   ? (string) trim($data['phone'])   : '';
+        $this->address = isset($data['address']) ? (string) trim($data['address']) : '';
+        // null cho guest — không ghi FK vào DB, tránh FK constraint với bảng users
+        $this->userId  = isset($data['user_id']) && $data['user_id'] !== '' && $data['user_id'] !== null
+                         ? (int) $data['user_id']
+                         : null;
+        $this->note    = isset($data['note'])    ? (string) trim($data['note'])    : '';
     }
 
 
     // GETTERS
 
-    public function getId(): int      { return $this->id;      }
+    public function getId(): ?int     { return $this->id;      }
     public function getName(): string  { return $this->name;    }
     public function getEmail(): string { return $this->email;   }
     public function getPhone(): string { return $this->phone;   }
     public function getAddress(): string { return $this->address; }
-    public function getUserId(): int   { return $this->userId;  }
+    public function getUserId(): ?int  { return $this->userId;  }
     public function getNote(): string  { return $this->note;    }
 
     /**
      * Kiểm tra khách hàng có tài khoản hay là vãng lai.
+     * Dùng nullable thay vì so sánh với 0 — rõ ràng hơn về mặt ý nghĩa.
      *
-     * @return bool true nếu có tài khoản (userId > 0).
+     * @return bool true nếu có tài khoản (userId không null).
      */
     public function isRegistered(): bool
     {
-        return $this->userId > 0;
+        return $this->userId !== null;
     }
 
 
@@ -165,12 +177,12 @@ class CustomerEntity
     public function toArray(): array
     {
         return [
-            'id'      => $this->id,
+            'id'      => $this->id,      // null nếu chưa INSERT vào DB
             'name'    => $this->name,
             'email'   => $this->email,
             'phone'   => $this->phone,
             'address' => $this->address,
-            'user_id' => $this->userId,
+            'user_id' => $this->userId,  // null nếu là khách vãng lai
             'note'    => $this->note,
         ];
     }
@@ -194,8 +206,3 @@ class CustomerEntity
         return $json;
     }
 }
-
-/* Các vấn đề cần sửa:
-* $id mặc định 0 thay vì null: Khi tạo Entity từ form checkout, $id = 0 khiến code nơi khác không phân biệt được "chưa có ID" với "ID hợp lệ"
-* $userId = 0 cho guest: Giá trị 0 không tồn tại trong bảng users nên dễ gây lỗi FK constraint nếu DB strict
-*/
