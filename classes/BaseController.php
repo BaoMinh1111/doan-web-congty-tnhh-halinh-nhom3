@@ -87,6 +87,8 @@ abstract class BaseController
     /**
      * Trả về dữ liệu dạng JSON và kết thúc request.
      * Dùng cho các AJAX endpoint: tìm kiếm sản phẩm, cập nhật giỏ hàng, ...
+     * Encode trước, kiểm tra lỗi, rồi mới gửi header — tránh trình duyệt nhận
+     * header JSON nhưng body rỗng khi encode thất bại.
      *
      * Cách dùng:
      *   $this->jsonResponse(['success' => true, 'data' => $products]);
@@ -99,9 +101,7 @@ abstract class BaseController
      */
     protected function jsonResponse(mixed $data, int $status = 200): void
     {
-        http_response_code($status);
-        header('Content-Type: application/json; charset=utf-8');
-
+        // Encode trước — nếu thất bại thì throw trước khi gửi bất kỳ header nào
         $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         if ($json === false) {
@@ -109,6 +109,10 @@ abstract class BaseController
                 'Không thể encode dữ liệu sang JSON: ' . json_last_error_msg()
             );
         }
+
+        // Encode thành công → mới gửi header
+        http_response_code($status);
+        header('Content-Type: application/json; charset=utf-8');
 
         echo $json;
         exit;
@@ -119,6 +123,7 @@ abstract class BaseController
 
     /**
      * Chuyển hướng request sang URL khác và kết thúc request.
+     * Strip ký tự \r và \n khỏi URL để chống Header Injection Attack.
      *
      * Cách dùng:
      *   $this->redirect('/login');
@@ -131,8 +136,12 @@ abstract class BaseController
      */
     protected function redirect(string $url, int $status = 302): void
     {
+        // Strip \r \n để chống Header Injection: attacker không thể inject header giả
+        // bằng cách truyền URL chứa ký tự xuống dòng.
+        $safeUrl = str_replace(["\r", "\n"], '', $url);
+
         http_response_code($status);
-        header('Location: ' . $url);
+        header('Location: ' . $safeUrl);
         exit;
     }
 
@@ -182,42 +191,128 @@ abstract class BaseController
     /**
      * Lấy và sanitize giá trị từ $_POST.
      * Trả về giá trị mặc định nếu key không tồn tại.
+     * Tự động cast kiểu kết quả theo kiểu của $default.
      *
      * Cách dùng:
-     *   $username = $this->post('username');           // chuỗi rỗng nếu không có
-     *   $note     = $this->post('note', 'Không có');   // giá trị mặc định tuỳ chỉnh
+     *   $username = $this->post('username');        // string, mặc định ''
+     *   $id       = $this->post('id', 0);           // cast về int vì default là int
+     *   $price    = $this->post('price', 0.0);      // cast về float vì default là float
+     *   $note     = $this->post('note', null);      // trả null nếu không có
      *
      * @param  string $key     Tên key trong $_POST.
-     * @param  mixed  $default Giá trị mặc định nếu key không tồn tại.
-     * @return mixed           Giá trị đã sanitize (nếu là string) hoặc giá trị gốc.
+     * @param  mixed  $default Giá trị mặc định. Kiểu của $default quyết định kiểu trả về.
+     * @return mixed           Giá trị đã sanitize và cast đúng kiểu.
      */
     protected function post(string $key, mixed $default = ''): mixed
     {
         $value = $_POST[$key] ?? $default;
-        return is_string($value)
-            ? ValidatorHelper::sanitizeInput($value)
-            : $value;
+        return $this->castInput($value, $default);
     }
 
     /**
      * Lấy và sanitize giá trị từ $_GET.
      * Trả về giá trị mặc định nếu key không tồn tại.
+     * Tự động cast kiểu kết quả theo kiểu của $default.
      *
      * Cách dùng:
-     *   $keyword    = $this->get('q');         // chuỗi tìm kiếm
-     *   $categoryId = $this->get('cat', 0);    // ID danh mục, mặc định 0
+     *   $keyword    = $this->get('q');          // string, mặc định ''
+     *   $categoryId = $this->get('cat', 0);     // cast về int vì default là int
+     *   $page       = $this->get('page', 1);    // cast về int
      *
      * @param  string $key     Tên key trong $_GET.
-     * @param  mixed  $default Giá trị mặc định nếu key không tồn tại.
-     * @return mixed           Giá trị đã sanitize (nếu là string) hoặc giá trị gốc.
+     * @param  mixed  $default Giá trị mặc định. Kiểu của $default quyết định kiểu trả về.
+     * @return mixed           Giá trị đã sanitize và cast đúng kiểu.
      */
     protected function get(string $key, mixed $default = ''): mixed
     {
         $value = $_GET[$key] ?? $default;
-        return is_string($value)
-            ? ValidatorHelper::sanitizeInput($value)
-            : $value;
+        return $this->castInput($value, $default);
     }
+
+    /**
+     * Sanitize và cast giá trị input về đúng kiểu dựa theo $default.
+     * Được dùng nội bộ bởi post() và get().
+     *
+     * Lưu ý về bool: HTTP không có kiểu boolean — form luôn gửi chuỗi.
+     * KHÔNG dùng (bool) $value vì (bool)"false" = true (chuỗi khác rỗng luôn truthy).
+     * Thay vào đó kiểm tra danh sách giá trị truthy thường gặp trong form HTML.
+     *
+     * @param  mixed $value   Giá trị thô từ $_POST / $_GET.
+     * @param  mixed $default Giá trị mặc định xác định kiểu đích.
+     * @return mixed
+     */
+    private function castInput(mixed $value, mixed $default): mixed
+    {
+        // Sanitize string trước khi cast
+        if (is_string($value)) {
+            $value = ValidatorHelper::sanitizeInput($value);
+        }
+
+        // Cast về đúng kiểu của $default
+        return match (gettype($default)) {
+            'integer' => (int)   $value,
+            'double'  => (float) $value,
+            'boolean' => in_array($value, ['1', 'true', 'on', 'yes'], true),
+            'NULL'    => $value,
+            default   => (string) $value,
+        };
+    }
+
+
+    // KIỂM SOÁT TRUY CẬP
+
+    /**
+     * Yêu cầu người dùng phải đăng nhập.
+     * Nếu chưa đăng nhập → redirect về trang login và kết thúc request.
+     * Gọi ở đầu method cần bảo vệ thay vì tự check session mỗi nơi.
+     *
+     * Cách dùng:
+     *   public function profile(): void
+     *   {
+     *       $this->requireLogin();
+     *       // ... logic sau khi đã xác nhận đăng nhập
+     *   }
+     *
+     * @param  string $loginUrl URL trang đăng nhập. Mặc định '/login'.
+     * @return void
+     */
+    protected function requireLogin(string $loginUrl = '/login'): void
+    {
+        if (!SessionHelper::isLoggedIn()) {
+            $this->redirect($loginUrl);
+        }
+    }
+
+    /**
+     * Yêu cầu người dùng phải là Admin.
+     * Nếu chưa đăng nhập → redirect về trang login.
+     * Nếu đã đăng nhập nhưng không phải admin → redirect về trang 403.
+     * Gọi ở đầu mọi method trong AdminController.
+     *
+     * Cách dùng:
+     *   public function dashboard(): void
+     *   {
+     *       $this->requireAdmin();
+     *       // ... logic chỉ admin mới chạy được
+     *   }
+     *
+     * @param  string $loginUrl URL trang đăng nhập. Mặc định '/login'.
+     * @param  string $forbiddenUrl URL trang 403. Mặc định '/403'.
+     * @return void
+     */
+    protected function requireAdmin(string $loginUrl = '/login', string $forbiddenUrl = '/403'): void
+    {
+        if (!SessionHelper::isLoggedIn()) {
+            $this->redirect($loginUrl);
+        }
+
+        if (!SessionHelper::isAdmin()) {
+            $this->redirect($forbiddenUrl);
+        }
+    }
+
+
+    // KIỂM TRA REQUEST
 
     /**
      * Kiểm tra request hiện tại có phải AJAX không.
@@ -268,10 +363,3 @@ abstract class BaseController
         return $this->getMethod() === 'POST';
     }
 }
-
-/* Các vấn đề cần sửa:
-* jsonResponse() — gửi header trước khi encode: khi AJAX gặp lỗi encode, trình duyệt nhận được header JSON nhưng body trống — rất khó debug.
-* redirect() — tiềm ẩn Header Injection qua ký tự xuống dòng
-* post() / get() — trả string, không cast kiểu số
-* Thêm requireLogin() / requireAdmin(): nếu ko thêm thì mỗi method admin phải tự check session — dễ quên, dễ hở.
-*/
