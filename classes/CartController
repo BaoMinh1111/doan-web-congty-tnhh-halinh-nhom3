@@ -112,3 +112,9 @@ class CartController extends BaseController
         ]);
     }
 }
+
+/* Các vấn đề cần sửa:
+* Gọi $this->input() — hàm không tồn tại trong BaseController: Chạy là lỗi Fatal Error ngay lập tức, không có ngoại lệ
+* Không validate $productId và $quantity: product_id=0 hoặc quantity=-1 âm thầm đi vào CartService gây hành xử sai.
+* Thiếu return sau jsonResponse() trong add() và remove(): nên thêm return để code dễ đọc và không gây nhầm lẫn khi refactor sau này.
+*/
