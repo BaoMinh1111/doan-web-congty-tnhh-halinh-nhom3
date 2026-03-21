@@ -270,8 +270,8 @@ abstract class BaseController
 }
 
 /* Các vấn đề cần sửa:
-* renderView() nên dùng require
-* Thiếu renderViewToString(): Hiện tại renderView() echo thẳng ra output nhưng cta sẽ có layout chung (header, footer, sidebar)
-* Thiếu method lấy input an toàn
-* isPost() có nhưng thiếu isGet() —> không nhất quán
+* jsonResponse() — gửi header trước khi encode: khi AJAX gặp lỗi encode, trình duyệt nhận được header JSON nhưng body trống — rất khó debug.
+* redirect() — tiềm ẩn Header Injection qua ký tự xuống dòng
+* post() / get() — trả string, không cast kiểu số
+* Thêm requireLogin() / requireAdmin(): nếu ko thêm thì mỗi method admin phải tự check session — dễ quên, dễ hở.
 */
