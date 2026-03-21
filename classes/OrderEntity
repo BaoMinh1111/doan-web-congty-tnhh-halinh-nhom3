@@ -1,0 +1,138 @@
+<?php
+
+/**
+ * Class OrderEntity
+ *
+ * Đại diện cho một đơn hàng trong hệ thống.
+ * Chỉ chứa dữ liệu + validate, không chứa logic xử lý nghiệp vụ.
+ *
+ * @package App\Entities
+ */
+class OrderEntity
+{
+    // ================= THUỘC TÍNH =================
+
+    private ?int $id;
+    private int $user_id;
+    private float $total_amount;
+    private string $status;
+    private string $created_at;
+
+
+    // ================= CONSTRUCTOR =================
+
+    /**
+     * Khởi tạo từ mảng data (thường từ DB hoặc form)
+     */
+    public function __construct(array $data = [])
+    {
+        $this->id           = $data['id'] ?? null;
+        $this->user_id      = (int) ($data['user_id'] ?? 0);
+        $this->total_amount = (float) ($data['total_amount'] ?? 0);
+        $this->status       = $data['status'] ?? 'pending';
+        $this->created_at   = $data['created_at'] ?? date('Y-m-d H:i:s');
+    }
+
+
+    // ================= GETTER =================
+
+    public function getId(): ?int
+    {
+        return $this->id;
+    }
+
+    public function getUserId(): int
+    {
+        return $this->user_id;
+    }
+
+    public function getTotalAmount(): float
+    {
+        return $this->total_amount;
+    }
+
+    public function getStatus(): string
+    {
+        return $this->status;
+    }
+
+    public function getCreatedAt(): string
+    {
+        return $this->created_at;
+    }
+
+
+    // ================= SETTER =================
+
+    public function setUserId(int $user_id): void
+    {
+        $this->user_id = $user_id;
+    }
+
+    public function setTotalAmount(float $total): void
+    {
+        if ($total < 0) {
+            throw new InvalidArgumentException("Tổng tiền không hợp lệ");
+        }
+
+        $this->total_amount = $total;
+    }
+
+    public function setStatus(string $status): void
+    {
+        $allowed = ['pending', 'paid', 'cancelled'];
+
+        if (!in_array($status, $allowed)) {
+            throw new InvalidArgumentException("Trạng thái không hợp lệ");
+        }
+
+        $this->status = $status;
+    }
+
+    public function setCreatedAt(string $created_at): void
+    {
+        $this->created_at = $created_at;
+    }
+
+
+    // ================= VALIDATE =================
+
+    /**
+     * Validate dữ liệu trước khi lưu DB
+     */
+    public function validate(): array
+    {
+        $errors = [];
+
+        if ($this->user_id <= 0) {
+            $errors['user_id'] = 'User không hợp lệ';
+        }
+
+        if ($this->total_amount < 0) {
+            $errors['total_amount'] = 'Tổng tiền phải >= 0';
+        }
+
+        if (empty($this->status)) {
+            $errors['status'] = 'Trạng thái không được để trống';
+        }
+
+        return $errors;
+    }
+
+
+    // ================= TO ARRAY =================
+
+    /**
+     * Chuyển object → array (để insert DB)
+     */
+    public function toArray(): array
+    {
+        return [
+            'id'           => $this->id,
+            'user_id'      => $this->user_id,
+            'total_amount' => $this->total_amount,
+            'status'       => $this->status,
+            'created_at'   => $this->created_at
+        ];
+    }
+}
