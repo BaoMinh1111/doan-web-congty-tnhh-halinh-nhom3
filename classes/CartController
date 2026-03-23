@@ -6,17 +6,15 @@ require_once 'CartService.php';
 /**
  * Class CartController
  *
- * Controller xử lý request liên quan đến giỏ hàng.
- * Kế thừa BaseController để dùng renderView, jsonResponse, redirect.
- *
- * @package App\Controllers
+ * Controller xử lý request giỏ hàng.
+ * Chỉ nhận request → validate → gọi service → trả response.
  */
 class CartController extends BaseController
 {
     private CartService $cartService;
 
 
-    // CONSTRUCTOR
+    // ================= CONSTRUCTOR =================
 
     public function __construct()
     {
@@ -25,7 +23,18 @@ class CartController extends BaseController
     }
 
 
-    // VIEW
+    // ================= INPUT HELPER =================
+
+    /**
+     * Lấy input từ GET/POST (an toàn, không phụ thuộc BaseController)
+     */
+    private function getInput(string $key, $default = null)
+    {
+        return $_POST[$key] ?? $_GET[$key] ?? $default;
+    }
+
+
+    // ================= VIEW =================
 
     /**
      * Hiển thị giỏ hàng
@@ -42,62 +51,109 @@ class CartController extends BaseController
     }
 
 
-    // ACTION
+    // ================= ACTION =================
 
     /**
-     * Thêm sản phẩm
+     * Thêm sản phẩm vào giỏ
      */
     public function add(): void
     {
-        $productId = (int) $this->input('product_id');
-        $quantity  = (int) $this->input('quantity', 1);
+        $productId = (int) $this->getInput('product_id');
+        $quantity  = (int) $this->getInput('quantity', 1);
+
+        // ===== VALIDATE =====
+        if ($productId <= 0 || $quantity <= 0) {
+
+            $response = [
+                'success' => false,
+                'message' => 'Dữ liệu không hợp lệ'
+            ];
+
+            if ($this->isAjax()) {
+                $this->jsonResponse($response);
+                return;
+            }
+
+            $this->redirect('/cart');
+            return;
+        }
 
         $result = $this->cartService->add($productId, $quantity);
 
         if ($this->isAjax()) {
             $this->jsonResponse($result);
+            return; // QUAN TRỌNG
         }
 
         $this->redirect('/cart');
     }
 
+
     /**
-     * Xoá sản phẩm
+     * Xoá sản phẩm khỏi giỏ
      */
     public function remove(): void
     {
-        $productId = (int) $this->input('product_id');
+        $productId = (int) $this->getInput('product_id');
+
+        if ($productId <= 0) {
+
+            $response = [
+                'success' => false,
+                'message' => 'Product ID không hợp lệ'
+            ];
+
+            if ($this->isAjax()) {
+                $this->jsonResponse($response);
+                return;
+            }
+
+            $this->redirect('/cart');
+            return;
+        }
 
         $result = $this->cartService->remove($productId);
 
         if ($this->isAjax()) {
             $this->jsonResponse($result);
+            return;
         }
 
         $this->redirect('/cart');
     }
+
 
     /**
      * Cập nhật số lượng
      */
     public function update(): void
     {
-        $productId = (int) $this->input('product_id');
-        $quantity  = (int) $this->input('quantity');
+        $productId = (int) $this->getInput('product_id');
+        $quantity  = (int) $this->getInput('quantity');
+
+        if ($productId <= 0 || $quantity < 0) {
+            $this->jsonResponse([
+                'success' => false,
+                'message' => 'Dữ liệu không hợp lệ'
+            ]);
+            return;
+        }
 
         $result = $this->cartService->update($productId, $quantity);
 
         $this->jsonResponse($result);
     }
 
+
     /**
-     * Xoá toàn bộ giỏ
+     * Xoá toàn bộ giỏ hàng
      */
     public function clear(): void
     {
         $this->cartService->clear();
         $this->redirect('/cart');
     }
+
 
     /**
      * Lấy tổng tiền (AJAX)
@@ -112,9 +168,3 @@ class CartController extends BaseController
         ]);
     }
 }
-
-/* Các vấn đề cần sửa:
-* Gọi $this->input() — hàm không tồn tại trong BaseController: Chạy là lỗi Fatal Error ngay lập tức, không có ngoại lệ
-* Không validate $productId và $quantity: product_id=0 hoặc quantity=-1 âm thầm đi vào CartService gây hành xử sai.
-* Thiếu return sau jsonResponse() trong add() và remove(): nên thêm return để code dễ đọc và không gây nhầm lẫn khi refactor sau này.
-*/
