@@ -1,0 +1,162 @@
+<?php
+
+/**
+ * Class InventoryEntity
+ *
+ * Đại diện cho tồn kho của sản phẩm.
+ * Quản lý số lượng tồn, trạng thái kho.
+ *
+ * @package App\Entities
+ */
+class InventoryEntity
+{
+    // ================= THUỘC TÍNH =================
+
+    private ?int $id;
+    private int $product_id;
+    private int $stock;
+    private string $updated_at;
+
+
+    // ================= CONSTRUCTOR =================
+
+    /**
+     * Khởi tạo từ mảng data
+     */
+    public function __construct(array $data = [])
+    {
+        $this->id         = $data['id'] ?? null;
+        $this->product_id = (int) ($data['product_id'] ?? 0);
+        $this->stock      = (int) ($data['stock'] ?? 0);
+        $this->updated_at = $data['updated_at'] ?? date('Y-m-d H:i:s');
+    }
+
+
+    // ================= GETTER =================
+
+    public function getId(): ?int
+    {
+        return $this->id;
+    }
+
+    public function getProductId(): int
+    {
+        return $this->product_id;
+    }
+
+    public function getStock(): int
+    {
+        return $this->stock;
+    }
+
+    public function getUpdatedAt(): string
+    {
+        return $this->updated_at;
+    }
+
+
+    // ================= SETTER =================
+
+    public function setProductId(int $product_id): void
+    {
+        if ($product_id <= 0) {
+            throw new InvalidArgumentException("Product ID không hợp lệ");
+        }
+
+        $this->product_id = $product_id;
+    }
+
+    public function setStock(int $stock): void
+    {
+        if ($stock < 0) {
+            throw new InvalidArgumentException("Stock không được âm");
+        }
+
+        $this->stock = $stock;
+    }
+
+    public function increaseStock(int $amount): void
+    {
+        if ($amount <= 0) {
+            throw new InvalidArgumentException("Số lượng tăng phải > 0");
+        }
+
+        $this->stock += $amount;
+        $this->touch();
+    }
+
+    public function decreaseStock(int $amount): void
+    {
+        if ($amount <= 0) {
+            throw new InvalidArgumentException("Số lượng giảm phải > 0");
+        }
+
+        if ($this->stock < $amount) {
+            throw new InvalidArgumentException("Không đủ hàng trong kho");
+        }
+
+        $this->stock -= $amount;
+        $this->touch();
+    }
+
+    public function setUpdatedAt(string $updated_at): void
+    {
+        $this->updated_at = $updated_at;
+    }
+
+
+    // ================= HELPER =================
+
+    /**
+     * Cập nhật thời gian thay đổi
+     */
+    private function touch(): void
+    {
+        $this->updated_at = date('Y-m-d H:i:s');
+    }
+
+    /**
+     * Kiểm tra còn hàng không
+     */
+    public function isInStock(): bool
+    {
+        return $this->stock > 0;
+    }
+
+
+    // ================= VALIDATE =================
+
+    /**
+     * Validate trước khi lưu DB
+     */
+    public function validate(): array
+    {
+        $errors = [];
+
+        if ($this->product_id <= 0) {
+            $errors['product_id'] = 'Sản phẩm không hợp lệ';
+        }
+
+        if ($this->stock < 0) {
+            $errors['stock'] = 'Số lượng tồn không hợp lệ';
+        }
+
+        return $errors;
+    }
+
+
+    // ================= TO ARRAY =================
+
+    /**
+     * Convert object → array
+     */
+    public function toArray(): array
+    {
+        return [
+            'id'         => $this->id,
+            'product_id' => $this->product_id,
+            'stock'      => $this->stock,
+            'updated_at' => $this->updated_at
+        ];
+    }
+}
