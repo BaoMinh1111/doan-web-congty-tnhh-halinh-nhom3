@@ -1,40 +1,35 @@
 <?php
 
+require_once 'ProductModel.php';
+
 /**
  * Class CartService
  *
  * Lớp dịch vụ xử lý logic giỏ hàng: thêm, xoá, cập nhật, tính tổng.
  * Là lớp Service thuần túy, không phụ thuộc Controller.
- * Quản lý dữ liệu giỏ hàng thông qua $_SESSION.
- *
- * @package App\Services
  */
 class CartService
 {
-    // HẰNG SỐ
+    // ================= HẰNG SỐ =================
 
-    /**
-     * Key lưu giỏ hàng trong session
-     */
     private const SESSION_CART = 'cart';
+    private const MAX_QUANTITY = 100;
 
 
-    // CONSTRUCTOR
+    // ================= THUỘC TÍNH =================
 
-    public function __construct()
+    private ProductModel $productModel;
+
+
+    // ================= CONSTRUCTOR =================
+
+    public function __construct(ProductModel $productModel)
     {
-        $this->startSession();
+        $this->productModel = $productModel;
     }
 
 
-    // SESSION MANAGEMENT
-
-    private function startSession(): void
-    {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }
-    }
+    // ================= INTERNAL =================
 
     private function getCart(): array
     {
@@ -47,144 +42,109 @@ class CartService
     }
 
 
-    // BUSINESS LOGIC
+    // ================= BUSINESS LOGIC =================
 
-    /**
-     * Lấy toàn bộ giỏ hàng
-     */
     public function all(): array
     {
         return $this->getCart();
     }
 
-    /**
-     * Thêm sản phẩm vào giỏ
-     */
     public function add(int $productId, int $quantity = 1): array
     {
         if ($productId <= 0 || $quantity <= 0) {
-            return [
-                'success' => false,
-                'message' => 'Dữ liệu không hợp lệ'
-            ];
+            return ['success' => false, 'message' => 'Dữ liệu không hợp lệ'];
+        }
+
+        if ($quantity > self::MAX_QUANTITY) {
+            return ['success' => false, 'message' => 'Số lượng vượt quá giới hạn'];
+        }
+
+        $product = $this->productModel->findById($productId);
+
+        if (!$product) {
+            return ['success' => false, 'message' => 'Sản phẩm không tồn tại'];
         }
 
         $cart = $this->getCart();
 
         if (isset($cart[$productId])) {
-            $cart[$productId]['quantity'] += $quantity;
+            $cart[$productId]['quantity'] = min(
+                $cart[$productId]['quantity'] + $quantity,
+                self::MAX_QUANTITY
+            );
         } else {
             $cart[$productId] = [
                 'product_id' => $productId,
+                'name'       => $product->getName(),
+                'price'      => $product->getPrice(),
                 'quantity'   => $quantity
             ];
         }
 
         $this->saveCart($cart);
 
-        return [
-            'success' => true,
-            'message' => 'Thêm sản phẩm thành công'
-        ];
+        return ['success' => true, 'message' => 'Thêm sản phẩm thành công'];
     }
 
-    /**
-     * Xoá sản phẩm khỏi giỏ
-     */
     public function remove(int $productId): array
     {
         $cart = $this->getCart();
 
         if (!isset($cart[$productId])) {
-            return [
-                'success' => false,
-                'message' => 'Sản phẩm không tồn tại'
-            ];
+            return ['success' => false, 'message' => 'Sản phẩm không tồn tại'];
         }
 
         unset($cart[$productId]);
         $this->saveCart($cart);
 
-        return [
-            'success' => true,
-            'message' => 'Đã xoá sản phẩm'
-        ];
+        return ['success' => true, 'message' => 'Đã xoá sản phẩm'];
     }
 
-    /**
-     * Cập nhật số lượng
-     */
     public function update(int $productId, int $quantity): array
     {
+        if ($productId <= 0) {
+            return ['success' => false, 'message' => 'Product ID không hợp lệ'];
+        }
+
         if ($quantity <= 0) {
             return $this->remove($productId);
+        }
+
+        if ($quantity > self::MAX_QUANTITY) {
+            return ['success' => false, 'message' => 'Số lượng vượt quá giới hạn'];
         }
 
         $cart = $this->getCart();
 
         if (!isset($cart[$productId])) {
-            return [
-                'success' => false,
-                'message' => 'Sản phẩm không tồn tại'
-            ];
+            return ['success' => false, 'message' => 'Sản phẩm không tồn tại'];
         }
 
         $cart[$productId]['quantity'] = $quantity;
         $this->saveCart($cart);
 
-        return [
-            'success' => true,
-            'message' => 'Cập nhật thành công'
-        ];
+        return ['success' => true, 'message' => 'Cập nhật thành công'];
     }
 
-    /**
-     * Xoá toàn bộ giỏ hàng
-     */
     public function clear(): void
     {
         unset($_SESSION[self::SESSION_CART]);
     }
 
-    /**
-     * Tính tổng tiền (demo)
-     */
     public function getTotal(): float
     {
         $cart = $this->getCart();
         $total = 0;
 
         foreach ($cart as $item) {
-            $price = 100; // mock
-            $total += $price * $item['quantity'];
+            $total += $item['price'] * $item['quantity'];
         }
 
         return $total;
     }
 
-    /**
-     * Tổng số lượng sản phẩm
-     */
     public function count(): int
     {
-        $cart = $this->getCart();
-        $count = 0;
-
-        foreach ($cart as $item) {
-            $count += $item['quantity'];
-        }
-
-        return $count;
+        return array_sum(array_column($this->getCart(), 'quantity'));
     }
 }
-
-/* Các vấn đề cần sửa:
-* getTotal() dùng giá mock cứng $price = 100 — không lấy giá thật từ DB: Tổng tiền luôn sai so với giá thật. 
-CartService cần nhận ProductModel qua constructor để lấy giá — hoặc lưu giá vào session lúc add()
-* add() không lưu tên và giá sản phẩm vào session — giỏ hàng chỉ có product_id và quantity: Khi render giỏ hàng, View không có tên sản phẩm hay giá để hiển thị. 
-Cần query DB mỗi lần load, hoặc lưu snapshot giá lúc add — snapshot an toàn hơn vì giá có thể thay đổi.
-* add() không kiểm tra $productId có tồn tại trong DB không: Người dùng có thể thêm product_id=9999 không có thật vào giỏ
-* add() không giới hạn số lượng tối đa — có thể thêm quantity=999999:  nên đặt giới hạn cứng trước ($quantity > 100 thì từ chối) 
-để tránh dữ liệu vô lý trong session.
-* startSession() trong constructor — Service không nên tự quản lý session: Service gọi session_start() làm khó test và vi phạm Single Responsibility.
-*/
