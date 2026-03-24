@@ -186,3 +186,6 @@ class OrderService
         $stmt->execute();
     }
 }
+
+/* Chưa làm nhiệm  vụ tích hợp logic khuyến mãi -> chưa hoàn thành nhiệm vụ task6
+*/
