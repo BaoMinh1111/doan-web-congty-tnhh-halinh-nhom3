@@ -4,44 +4,38 @@ require_once 'CartService.php';
 require_once 'OrderEntity.php';
 require_once 'OrderItemEntity.php';
 require_once 'InventoryModel.php';
+require_once 'PromotionModel.php';
 
 /**
  * Class OrderService
- *
- * Xử lý nghiệp vụ đặt hàng:
- * - Lấy dữ liệu từ Cart
- * - Kiểm tra tồn kho
- * - Tạo Order + OrderItem
- * - Trừ kho
- *
- * @package App\Services
  */
 class OrderService
 {
-    // ================= THUỘC TÍNH =================
-
     private CartService $cartService;
     private InventoryModel $inventoryModel;
+    private PromotionModel $promotionModel;
     private mysqli $conn;
-
-
-    // ================= CONSTRUCTOR =================
 
     public function __construct(mysqli $conn)
     {
         $this->conn = $conn;
         $this->cartService = new CartService();
         $this->inventoryModel = new InventoryModel($conn);
+        $this->promotionModel = new PromotionModel($conn);
     }
 
-
-    // ================= PLACE ORDER =================
-
     /**
-     * Đặt hàng
+     * Đặt hàng (có khuyến mãi)
      */
-    public function placeOrder(int $userId): array
+    public function placeOrder(int $userId, ?string $promoCode = null): array
     {
+        if ($userId <= 0) {
+            return [
+                'success' => false,
+                'message' => 'User không hợp lệ'
+            ];
+        }
+
         $cart = $this->cartService->all();
 
         if (empty($cart)) {
@@ -51,8 +45,7 @@ class OrderService
             ];
         }
 
-        // ================= KIỂM TRA TỒN KHO =================
-
+        // ===== CHECK STOCK =====
         foreach ($cart as $item) {
             if (!$this->inventoryModel->hasStock($item['product_id'], $item['quantity'])) {
                 return [
@@ -62,15 +55,30 @@ class OrderService
             }
         }
 
-        // ================= TRANSACTION =================
+        // ===== TOTAL =====
+        $total = $this->cartService->getTotal();
+        $discount = 0;
+        $promoId = null;
 
+        // ===== APPLY PROMOTION =====
+        if (!empty($promoCode)) {
+            $promo = $this->promotionModel->apply($promoCode, $total);
+
+            if (!$promo['success']) {
+                return $promo;
+            }
+
+            $discount = $promo['discount'];
+            $total    = $promo['final'];
+            $promoId  = $promo['promo_id'] ?? null;
+        }
+
+        // ===== TRANSACTION =====
         $this->conn->begin_transaction();
 
         try {
-            // ================= TẠO ORDER =================
 
-            $total = $this->cartService->getTotal();
-
+            // ===== CREATE ORDER =====
             $orderEntity = new OrderEntity([
                 'user_id'      => $userId,
                 'total_amount' => $total,
@@ -84,15 +92,21 @@ class OrderService
 
             $orderId = $this->insertOrder($orderEntity);
 
-            // ================= TẠO ORDER ITEMS =================
-
+            // ===== CREATE ORDER ITEMS =====
             foreach ($cart as $item) {
+
+                // dùng giá snapshot từ cart (FIX lỗi mock)
+                $price = $item['price'] ?? 0;
+
+                if ($price <= 0) {
+                    throw new Exception('Giá sản phẩm không hợp lệ');
+                }
 
                 $orderItem = new OrderItemEntity([
                     'order_id'   => $orderId,
                     'product_id' => $item['product_id'],
                     'quantity'   => $item['quantity'],
-                    'price'      => 100 // mock
+                    'price'      => $price
                 ]);
 
                 $errors = $orderItem->validate();
@@ -102,30 +116,32 @@ class OrderService
 
                 $this->insertOrderItem($orderItem);
 
-                // ================= TRỪ KHO =================
-
+                // ===== TRỪ KHO =====
                 $this->inventoryModel->decreaseStock(
                     $item['product_id'],
                     $item['quantity']
                 );
             }
 
-            // ================= COMMIT =================
+            // ===== TĂNG LƯỢT DÙNG PROMOTION =====
+            if ($promoId) {
+                $this->promotionModel->increaseUsedCount($promoId);
+            }
 
+            // ===== COMMIT =====
             $this->conn->commit();
 
-            // Xoá giỏ hàng
             $this->cartService->clear();
 
             return [
-                'success' => true,
-                'message' => 'Đặt hàng thành công',
-                'order_id' => $orderId
+                'success'  => true,
+                'message'  => 'Đặt hàng thành công',
+                'order_id' => $orderId,
+                'discount' => $discount,
+                'final'    => $total
             ];
 
         } catch (Exception $e) {
-
-            // ================= ROLLBACK =================
 
             $this->conn->rollback();
 
@@ -137,11 +153,8 @@ class OrderService
     }
 
 
-    // ================= PRIVATE DB METHODS =================
+    // ================= DB =================
 
-    /**
-     * Insert Order
-     */
     private function insertOrder(OrderEntity $order): int
     {
         $data = $order->toArray();
@@ -150,6 +163,11 @@ class OrderService
                 VALUES (?, ?, ?, ?)";
 
         $stmt = $this->conn->prepare($sql);
+
+        if (!$stmt) {
+            throw new Exception('Lỗi prepare order');
+        }
+
         $stmt->bind_param(
             "idss",
             $data['user_id'],
@@ -158,15 +176,14 @@ class OrderService
             $data['created_at']
         );
 
-        $stmt->execute();
+        if (!$stmt->execute()) {
+            throw new Exception('Lỗi insert order');
+        }
 
         return $this->conn->insert_id;
     }
 
 
-    /**
-     * Insert OrderItem
-     */
     private function insertOrderItem(OrderItemEntity $item): void
     {
         $data = $item->toArray();
@@ -175,6 +192,11 @@ class OrderService
                 VALUES (?, ?, ?, ?)";
 
         $stmt = $this->conn->prepare($sql);
+
+        if (!$stmt) {
+            throw new Exception('Lỗi prepare order item');
+        }
+
         $stmt->bind_param(
             "iiid",
             $data['order_id'],
@@ -183,9 +205,8 @@ class OrderService
             $data['price']
         );
 
-        $stmt->execute();
+        if (!$stmt->execute()) {
+            throw new Exception('Lỗi insert order item');
+        }
     }
 }
-
-/* Chưa làm nhiệm  vụ tích hợp logic khuyến mãi -> chưa hoàn thành nhiệm vụ task6
-*/
