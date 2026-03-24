@@ -82,3 +82,25 @@ class PromotionModel
         return min($p->getValue(), $total);
     }
 }
+
+/* Các vấn đề cần sửa: 
+* Không tuân thủ kiến trúc chung của dự án:
+Toàn bộ dự án em đang dùng PDO + BaseModel + Entity + Service Layer.
+Lớp này đột ngột dùng mysqli + viết SQL thủ công + không kế thừa BaseModel
+Constructor nhận mysqli $conn → phá vỡ nguyên tắc Dependency Injection và Singleton DB mà nhóm đã làm rất tốt trước đó.
+Không có PromotionEntity được inject hay sử dụng đúng cách (chỉ map thủ công).
+* Không sử dụng BaseModel + PDO:
+Mất hết các lợi ích: prepared statement an toàn, transaction, fetchAll/fetchOne, pagination, logging lỗi…
+Dùng mysqli trực tiếp → lặp lại code, khó bảo trì, dễ SQL Injection nếu sau này mở rộng.
+* PromotionEntity bị lạm dụng sai:
+Constructor của PromotionEntity nhận quá nhiều tham số rời rạc → không nhất quán với phong cách new Entity($row) như các Entity khác (OrderEntity, OrderItemEntity, InventoryEntity…).
+Method map() thủ công → nên để trong Entity
+* Thiếu nhiều chức năng cần thiết cho Promotion:
+Không có getAll(), getActivePromotions(), create(), update(), delete(), increaseUsedCount(), checkUsageLimit()…
+apply() chỉ kiểm tra cơ bản, chưa xử lý max_uses, used_count, start_date…
+Không có transaction khi áp dụng mã
+* Code style & bảo mật:
+Không xử lý lỗi prepare statement tốt (if (!$stmt) return null; quá thô).
+Không có validate input (code nên trim, uppercase…).
+calculate() nên nằm trong PromotionEntity thay vì Model (business logic thuộc Entity).
+*/
