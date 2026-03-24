@@ -168,3 +168,21 @@ class CartController extends BaseController
         ]);
     }
 }
+
+/* Các vấn đề cần sửa:
+* getInput() chưa thực sự an toàn và chưa nhất quán:
+Nên trim() dữ liệu.
+* Response JSON chưa thống nhất:
+Một số chỗ trả ['success' => false, 'message' => ...]
+Một số chỗ (như total()) trả ['success' => true, 'total' => ...]
+Nên thống nhất format response AJAX cho toàn bộ CartController
+* Thiếu xử lý lỗi từ Service:
+Hiện tại gọi $result = $this->cartService->add(...) rồi trả thẳng $result.
+Nếu CartService throw exception (ví dụ sản phẩm không tồn tại), controller sẽ crash hoặc trắng trang.
+Nên bọc try-catch cho các action quan trọng.
+* Một số logic nhỏ chưa tối ưu:
+Trong update(): cho phép quantity = 0 → nên redirect về remove hoặc gọi $this->remove() thay vì update quantity = 0.
+clear() không có phiên bản AJAX.
+* Constructor vẫn dùng new CartService():
+Nên inject qua constructor để nhất quán với các Controller khác
+*/
