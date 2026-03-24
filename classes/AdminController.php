@@ -375,3 +375,15 @@ class AdminController extends BaseController
         $this->redirect('/admin/products');
     }
 }
+
+/* Các vấn đề cần sửa:
+* Logic upload ảnh và xử lý lỗi chưa tối ưu: Trong handleSaveProduct(): nếu upload ảnh thất bại, vẫn tiếp tục validate và render form, 
+nhưng $data['image'] vẫn giữ giá trị cũ → có thể gây nhầm lẫn. Khi có lỗi upload, thêm $errors['image'] → tốt, 
+nhưng nên ưu tiên hiển thị lỗi upload trước các lỗi khác.
+* Thiếu xử lý exception / lỗi hệ thống: Trong handleSaveProduct(), nếu createProduct() hoặc updateProduct() throw exception 
+(ví dụ DB lỗi, validate service throw), controller sẽ trắng trang hoặc lỗi 500: Nên bọc try-catch ở mức controller cho các action quan trọng. 
+* Một số method chưa nhất quán: deleteProduct() chỉ chấp nhận POST → tốt. Nhưng manageProducts() hỗ trợ AJAX, còn các method khác chưa thống nhất 
+format JSON khi là AJAX. dashboard() render trực tiếp layout, trong khi manageProducts() dùng renderViewToString() → hơi không đồng bộ.
+* Khi delete: chỉ kiểm tra $id > 0 và tồn tại → nên thêm CSRF token cho action delete (vì là POST).
+* Không có rate limiting hoặc kiểm tra quyền chi tiết hơn (ví dụ chỉ admin mới được delete).
+*/
