@@ -86,3 +86,19 @@ class PromotionEntity
         return $errors;
     }
 }
+
+/* Các vấn đề cần sửa:
+* Không nhất quán với phong cách Entity của toàn dự án:
+Constructor nhận 7 tham số rời rạc → rất khó dùng, dễ sai thứ tự.
+Không có toArray() / toJson() → không thể trả JSON cho AJAX hoặc truyền cho View dễ dàng.
+Không map từ array của DB → PromotionModel phải viết hàm map() thủ công
+* Constructor quá cứng:
+Phải truyền đủ 7 tham số mỗi lần new PromotionEntity(...)
+Không linh hoạt khi DB trả về array (phải map thủ công).
+Không có fallback giá trị mặc định hợp lý (ví dụ $minOrder = 0, $isActive = true chỉ là default ở tham số, không xử lý trong thân hàm).
+* Thiếu các method quan trọng
+* Validate còn yếu:
+code nên uppercase và kiểm tra độ dài.
+Chưa kiểm tra expiredAt có phải datetime hợp lệ không.
+Chưa kiểm tra nếu type = percent thì value phải là số thập phân hợp lý.
+*/
