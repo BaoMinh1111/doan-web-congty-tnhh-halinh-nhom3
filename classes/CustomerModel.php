@@ -81,11 +81,20 @@ class CustomerModel extends BaseModel
      * Lấy tất cả đơn hàng của một khách hàng theo ID.
      * Dùng cho trang "Đơn hàng của tôi" phía customer.
      *
+     * Trả về mảng thô có chủ đích: dữ liệu join từ nhiều bảng (orders + products...)
+     * không map 1-1 vào một Entity đơn lẻ nào. Tầng Service hoặc Controller
+     * sẽ chịu trách nhiệm wrap thành OrderEntity khi cần.
+     *
      * @param  int   $customerId
-     * @return array Mảng dữ liệu đơn hàng thô (join với bảng orders).
+     * @return array[] Mảng dữ liệu đơn hàng thô, mỗi phần tử là 1 mảng kết hợp.
+     * @throws InvalidArgumentException Nếu $customerId không hợp lệ.
      */
     public function getOrdersByCustomerId(int $customerId): array
     {
+        if ($customerId <= 0) {
+            throw new InvalidArgumentException('Customer ID phải lớn hơn 0.');
+        }
+
         return $this->fetchAll(
             "SELECT o.*
              FROM orders o
@@ -98,14 +107,17 @@ class CustomerModel extends BaseModel
     /**
      * Lưu thông tin khách hàng khi đặt hàng.
      * Dùng cho CẢ 2 luồng:
-     *   - Khách vãng lai    : truyền $data không có 'user_id' → lưu NULL vào DB, tránh FK constraint.
-     *   - Khách có tài khoản: truyền $data kèm 'user_id' hợp lệ → lưu FK bình thường.
+     *   - Khách vãng lai    : truyền $data không có 'user_id' → lưu NULL vào DB.
+     *   - Khách có tài khoản: truyền $data kèm 'user_id' hợp lệ.
      *
-     * Xử lý race condition bằng INSERT ... ON DUPLICATE KEY UPDATE:
-     *   - Nếu email chưa tồn tại → INSERT bình thường, trả về lastInsertId.
-     *   - Nếu email đã tồn tại (kể cả 2 request đồng thời) → DB tự UPDATE `name`,
-     *     không INSERT trùng, sau đó SELECT lấy ID hiện có.
-     *   → Toàn bộ là 1 câu SQL atomic, không có khoảng hở race condition.
+     * Xử lý race condition bằng INSERT IGNORE:
+     *   - Email chưa tồn tại → INSERT bình thường, trả về lastInsertId.
+     *   - Email đã tồn tại (kể cả 2 request đồng thời) → IGNORE, không INSERT trùng,
+     *     không ghi đè dữ liệu cũ, sau đó SELECT lấy ID hiện có.
+     *   → Toàn bộ là 1 câu SQL atomic, không có race condition, không mất dữ liệu.
+     *
+     * Khác với ON DUPLICATE KEY UPDATE: INSERT IGNORE không ghi đè bất kỳ trường nào
+     * → tên cũ của customer được giữ nguyên hoàn toàn.
      *
      * Yêu cầu: cột `email` trong bảng customers phải có UNIQUE constraint.
      *
@@ -125,13 +137,11 @@ class CustomerModel extends BaseModel
             );
         }
 
-        // INSERT ... ON DUPLICATE KEY UPDATE → atomic, không có race condition
-        // Khi email trùng: DB update `name` (no-op thực chất), giữ nguyên bản ghi cũ.
-        // LAST_INSERT_ID() trả về 0 nếu không có INSERT mới → cần SELECT thêm.
+        // INSERT IGNORE: nếu email đã tồn tại → bỏ qua hoàn toàn, giữ nguyên dữ liệu cũ
+        // Không dùng ON DUPLICATE KEY UPDATE vì sẽ ghi đè tên/thông tin cũ không mong muốn
         $this->prepareStmt(
-            "INSERT INTO {$this->table} (name, email, phone, address, user_id, note)
-             VALUES (?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE name = VALUES(name)",
+            "INSERT IGNORE INTO {$this->table} (name, email, phone, address, user_id, note)
+             VALUES (?, ?, ?, ?, ?, ?)",
             [
                 $entity->getName(),
                 $entity->getEmail(),
@@ -142,20 +152,20 @@ class CustomerModel extends BaseModel
             ]
         );
 
-        // lastInsertId() > 0 → vừa INSERT mới
-        // lastInsertId() = 0 → email đã tồn tại (ON DUPLICATE KEY chạy) → SELECT lấy ID
+        // lastInsertId() > 0 → vừa INSERT mới thành công
+        // lastInsertId() = 0 → email đã tồn tại (IGNORE chạy) → SELECT lấy ID cũ
         $lastId = (int) $this->db->lastInsertId();
 
         if ($lastId > 0) {
             return $lastId;
         }
 
-        // Email đã tồn tại → lấy ID hiện có
+        // Email đã tồn tại → lấy ID hiện có, không thay đổi gì
         $existing = $this->getByEmail($entity->getEmail());
 
         return $existing?->getId()
             ?? throw new RuntimeException(
-                'Không thể lấy ID customer sau upsert với email: ' . $entity->getEmail()
+                'Không thể lấy ID customer sau INSERT IGNORE với email: ' . $entity->getEmail()
             );
     }
 
@@ -163,10 +173,13 @@ class CustomerModel extends BaseModel
      * Cập nhật thông tin cá nhân của khách hàng.
      * Dùng cho trang "Cập nhật thông tin" phía customer.
      *
-     * @param  int   $id
-     * @param  array $data
+     * Kiểm tra email mới có bị trùng với customer KHÁC không trước khi UPDATE.
+     * Nếu trùng → ném exception, không cho phép đổi thành email đã có người dùng.
+     *
+     * @param  int   $id   ID của customer cần cập nhật.
+     * @param  array $data Dữ liệu mới.
      * @return bool
-     * @throws InvalidArgumentException Nếu dữ liệu không hợp lệ.
+     * @throws InvalidArgumentException Nếu dữ liệu không hợp lệ hoặc email đã tồn tại.
      */
     public function updateInfo(int $id, array $data): bool
     {
@@ -176,6 +189,15 @@ class CustomerModel extends BaseModel
         if (!empty($errors)) {
             throw new InvalidArgumentException(
                 'Thông tin cập nhật không hợp lệ: ' . implode(', ', $errors)
+            );
+        }
+
+        // Kiểm tra email mới có thuộc về customer KHÁC không
+        // → cho phép giữ nguyên email cũ (same ID), chặn trùng với người khác
+        $existingByEmail = $this->getByEmail($entity->getEmail());
+        if ($existingByEmail !== null && $existingByEmail->getId() !== $id) {
+            throw new InvalidArgumentException(
+                'Email "' . $entity->getEmail() . '" đã được sử dụng bởi tài khoản khác.'
             );
         }
 
@@ -190,23 +212,33 @@ class CustomerModel extends BaseModel
 
     /**
      * Lấy danh sách khách hàng theo trang — dùng cho trang admin quản lý customer.
-     * Override BaseModel::paginate() để wrap kết quả thành CustomerEntity[].
+     * Viết SQL trực tiếp thay vì gọi parent::paginate() để đảm bảo luôn trả về
+     * CustomerEntity[] đúng kiểu, không phụ thuộc vào kiểu trả về của BaseModel.
      *
      * Cách dùng:
      *   $customers = $customerModel->paginate(page: 2, limit: 15);
-     *   // → trả về CustomerEntity[] của trang 2, mỗi trang 15 bản ghi
      *
      * @param  int              $page  Trang hiện tại (bắt đầu từ 1).
      * @param  int              $limit Số bản ghi mỗi trang (1–100).
      * @return CustomerEntity[]
-     * @throws InvalidArgumentException Nếu $page hoặc $limit không hợp lệ (từ BaseModel).
+     * @throws InvalidArgumentException Nếu $page hoặc $limit không hợp lệ.
      */
     public function paginate(int $page = 1, int $limit = 15): array
     {
-        return array_map(
-            fn($row) => new CustomerEntity($row),
-            parent::paginate($page, $limit)
+        if ($page < 1) {
+            throw new InvalidArgumentException('Số trang phải >= 1.');
+        }
+        if ($limit < 1 || $limit > 100) {
+            throw new InvalidArgumentException('Số bản ghi mỗi trang phải từ 1 đến 100.');
+        }
+
+        $offset = ($page - 1) * $limit;
+
+        $rows = $this->fetchAll(
+            "SELECT * FROM {$this->table} ORDER BY id DESC LIMIT {$limit} OFFSET {$offset}"
         );
+
+        return array_map(fn($row) => new CustomerEntity($row), $rows);
     }
 
     /**
@@ -234,10 +266,3 @@ class CustomerModel extends BaseModel
         return array_map(fn($row) => new CustomerEntity($row), $rows);
     }
 }
-
-/* Các vấn đề cần sửa:
-* paginate() override trả CustomerEntity[] nhưng gọi parent::paginate() trả về mảng có key 'data', 'total', 'totalPages'... — wrap sai kiểu
-* getOrdersByCustomerId() trả mảng thô trong khi các method khác trả Entity
-* updateInfo() có thể đổi email thành email đã tồn tại của customer khác: ktra có trùng email 
-* registerGuest() cập nhật name khi email trùng — có thể ghi đè tên cũ không mong muốn
-*/
