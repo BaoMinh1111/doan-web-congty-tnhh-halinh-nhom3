@@ -73,20 +73,22 @@ class AdminController extends BaseController
     {
         $this->requireAdmin();
 
-        // Lấy thống kê tổng quan
-        $totalProducts = $this->productService->countProducts();
-        $totalOrders   = $this->orderService->countOrders();
-        $revenueMonth  = $this->orderService->getRevenueByMonth(
-            (int) date('Y'),
-            (int) date('m')
-        );
+        try {
+            $totalProducts    = $this->productService->countProducts();
+            $totalOrders      = $this->orderService->countOrders();
+            $revenueMonth     = $this->orderService->getRevenueByMonth(
+                (int) date('Y'),
+                (int) date('m')
+            );
+            $lowStockProducts = $this->productService->getLowStockProducts(5);
+            $recentOrders     = $this->orderService->getRecentOrders(10);
+        } catch (RuntimeException $e) {
+            error_log('[AdminController::dashboard] ' . $e->getMessage());
+            $this->renderSystemError('Không thể tải dữ liệu dashboard. Vui lòng thử lại.');
+            return;
+        }
 
-        // Sản phẩm sắp hết hàng (stock <= 5)
-        $lowStockProducts = $this->productService->getLowStockProducts(5);
-
-        // Đơn hàng mới nhất (10 đơn gần nhất)
-        $recentOrders = $this->orderService->getRecentOrders(10);
-
+        // Nhất quán với manageProducts(): dùng renderViewToString + layout
         $content = $this->renderViewToString('admin/dashboard', [
             'totalProducts'    => $totalProducts,
             'totalOrders'      => $totalOrders,
@@ -182,6 +184,8 @@ class AdminController extends BaseController
             'categories' => $this->productService->getAllCategories(),
             'errors'     => [],
             'formTitle'  => 'Thêm sản phẩm mới',
+            'old'        => [],
+            'csrf_token' => $this->generateCsrfToken(),
         ]);
 
         $this->renderView('layouts/admin', [
@@ -227,6 +231,8 @@ class AdminController extends BaseController
             'categories' => $this->productService->getAllCategories(),
             'errors'     => [],
             'formTitle'  => 'Chỉnh sửa sản phẩm',
+            'old'        => [],
+            'csrf_token' => $this->generateCsrfToken(),
         ]);
 
         $this->renderView('layouts/admin', [
@@ -240,6 +246,7 @@ class AdminController extends BaseController
     /**
      * Xử lý xoá sản phẩm.
      * Chỉ chấp nhận POST để tránh xoá nhầm khi crawler/bot gọi GET.
+     * Verify CSRF token để chống Cross-Site Request Forgery.
      * Xoá ảnh trên disk trước, sau đó xoá bản ghi trong DB.
      *
      * Route: POST /admin/products/delete
@@ -254,23 +261,43 @@ class AdminController extends BaseController
             $this->redirect('/admin/products');
         }
 
+        // Verify CSRF token
+        if (!$this->verifyCsrfToken($this->post('csrf_token'))) {
+            if ($this->isAjax()) {
+                $this->jsonResponse(['success' => false, 'message' => 'Yêu cầu không hợp lệ (CSRF).'], 403);
+            }
+            $this->redirect('/admin/products');
+        }
+
         $id = $this->post('id', 0);
 
         if ($id <= 0) {
+            if ($this->isAjax()) {
+                $this->jsonResponse(['success' => false, 'message' => 'ID sản phẩm không hợp lệ.'], 400);
+            }
             $this->redirect('/admin/products');
         }
 
-        // Lấy thông tin sản phẩm để lấy tên file ảnh trước khi xoá
         $product = $this->productService->getProductById($id);
 
         if ($product === null) {
+            if ($this->isAjax()) {
+                $this->jsonResponse(['success' => false, 'message' => 'Sản phẩm không tồn tại.'], 404);
+            }
             $this->redirect('/admin/products');
         }
 
-        // Xoá ảnh trên disk trước — nếu xoá DB thất bại thì còn biết file cũ
-        UploadHelper::deleteProductImage($product->getImage());
-
-        $deleted = $this->productService->deleteProduct($id);
+        try {
+            // Xoá ảnh trên disk trước — nếu xoá DB thất bại thì còn biết file cũ
+            UploadHelper::deleteProductImage($product->getImage());
+            $deleted = $this->productService->deleteProduct($id);
+        } catch (RuntimeException $e) {
+            error_log('[AdminController::deleteProduct] ' . $e->getMessage());
+            if ($this->isAjax()) {
+                $this->jsonResponse(['success' => false, 'message' => 'Lỗi hệ thống. Vui lòng thử lại.'], 500);
+            }
+            $this->redirect('/admin/products');
+        }
 
         if ($this->isAjax()) {
             $this->jsonResponse([
@@ -291,16 +318,18 @@ class AdminController extends BaseController
      *
      * Quy trình:
      *   1. Thu thập dữ liệu từ POST.
-     *   2. Xử lý upload ảnh (nếu có file mới).
+     *   2. Xử lý upload ảnh — nếu thất bại thì dừng ngay, render lỗi upload trước.
      *   3. Validate dữ liệu qua ProductService.
      *   4. Nếu có lỗi → render lại form với thông báo lỗi.
-     *   5. Nếu hợp lệ → lưu DB → redirect danh sách.
+     *   5. Nếu hợp lệ → lưu DB (bọc try-catch) → redirect danh sách.
      *
      * @param  int|null $id null = thêm mới, int = cập nhật theo ID.
      * @return void
      */
     private function handleSaveProduct(?int $id): void
     {
+        $formTitle = $id !== null ? 'Chỉnh sửa sản phẩm' : 'Thêm sản phẩm mới';
+
         // Bước 1: Thu thập dữ liệu từ POST
         $data = [
             'name'        => $this->post('name'),
@@ -312,66 +341,144 @@ class AdminController extends BaseController
         ];
 
         // Bước 2: Xử lý upload ảnh
-        $oldImage  = '';
-        $imageError = '';
+        $oldImage = '';
 
         if ($id !== null) {
-            // Cập nhật: lấy ảnh cũ để xoá sau khi upload ảnh mới thành công
-            $existing = $this->productService->getProductById($id);
-            $oldImage = $existing?->getImage() ?? '';
-            // Nếu không upload ảnh mới thì giữ ảnh cũ
-            $data['image'] = $oldImage;
+            $existing      = $this->productService->getProductById($id);
+            $oldImage      = $existing?->getImage() ?? '';
+            $data['image'] = $oldImage; // giữ ảnh cũ nếu không upload mới
         }
 
         if (UploadHelper::hasFile($_FILES['image'] ?? [])) {
-            $uploadResult = UploadHelper::uploadProductImage(
-                $_FILES['image'],
-                $oldImage  // tự xoá ảnh cũ nếu upload thành công
-            );
+            $uploadResult = UploadHelper::uploadProductImage($_FILES['image'], $oldImage);
 
             if (!$uploadResult['success']) {
-                $imageError = $uploadResult['message'];
-            } else {
-                $data['image'] = $uploadResult['filename'];
+                // Upload thất bại → reset image về rỗng (không giữ giá trị cũ gây nhầm lẫn),
+                // ưu tiên hiển thị lỗi upload trước khi validate các trường khác.
+                $data['image'] = '';
+                $this->renderProductForm($id, $formTitle, $data, ['image' => $uploadResult['message']]);
+                return;
             }
+
+            $data['image'] = $uploadResult['filename'];
         }
 
         // Bước 3: Validate dữ liệu qua ProductService
         $errors = $this->productService->validateProductData($data);
 
-        if (!empty($imageError)) {
-            $errors['image'] = $imageError;
-        }
-
         // Bước 4: Có lỗi → render lại form kèm thông báo lỗi
         if (!empty($errors)) {
-            $product    = $id !== null ? $this->productService->getProductById($id) : null;
-            $formTitle  = $id !== null ? 'Chỉnh sửa sản phẩm' : 'Thêm sản phẩm mới';
-
-            $content = $this->renderViewToString('admin/products/form', [
-                'product'    => $product,
-                'categories' => $this->productService->getAllCategories(),
-                'errors'     => $errors,
-                'formTitle'  => $formTitle,
-                'old'        => $data, // dữ liệu cũ để điền lại form
-            ]);
-
-            $this->renderView('layouts/admin', [
-                'content'       => $content,
-                'title'         => $formTitle . ' - Quản trị',
-                'activeMenu'    => 'products',
-                'adminUsername' => SessionHelper::getSessionUsername() ?? '',
-            ]);
+            $this->renderProductForm($id, $formTitle, $data, $errors);
             return;
         }
 
         // Bước 5: Hợp lệ → lưu DB
-        if ($id === null) {
-            $this->productService->createProduct($data);
-        } else {
-            $this->productService->updateProduct($id, $data);
+        try {
+            if ($id === null) {
+                $this->productService->createProduct($data);
+            } else {
+                $this->productService->updateProduct($id, $data);
+            }
+        } catch (RuntimeException $e) {
+            error_log('[AdminController::handleSaveProduct] ' . $e->getMessage());
+            $this->renderProductForm($id, $formTitle, $data, [
+                'system' => 'Lỗi hệ thống khi lưu dữ liệu. Vui lòng thử lại.',
+            ]);
+            return;
         }
 
         $this->redirect('/admin/products');
+    }
+
+    /**
+     * Render lại form sản phẩm kèm lỗi — dùng chung khi upload thất bại,
+     * validate thất bại, hoặc DB lỗi trong handleSaveProduct().
+     * Tách ra để tránh lặp code render trong các nhánh lỗi khác nhau.
+     *
+     * @param  int|null $id        ID sản phẩm (null nếu thêm mới).
+     * @param  string   $formTitle Tiêu đề form.
+     * @param  array    $old       Dữ liệu cũ để điền lại form.
+     * @param  array    $errors    Mảng lỗi truyền vào view.
+     * @return void
+     */
+    private function renderProductForm(?int $id, string $formTitle, array $old, array $errors): void
+    {
+        $product = $id !== null ? $this->productService->getProductById($id) : null;
+
+        $content = $this->renderViewToString('admin/products/form', [
+            'product'    => $product,
+            'categories' => $this->productService->getAllCategories(),
+            'errors'     => $errors,
+            'formTitle'  => $formTitle,
+            'old'        => $old,
+        ]);
+
+        $this->renderView('layouts/admin', [
+            'content'       => $content,
+            'title'         => $formTitle . ' - Quản trị',
+            'activeMenu'    => 'products',
+            'adminUsername' => SessionHelper::getSessionUsername() ?? '',
+        ]);
+    }
+
+
+    // CSRF & LỖI HỆ THỐNG
+
+    /**
+     * Sinh CSRF token mới và lưu vào session.
+     * Gọi khi render form — truyền token vào view để nhúng vào hidden input.
+     *
+     * Cách dùng trong Controller:
+     *   'csrf_token' => $this->generateCsrfToken()
+     *
+     * Cách dùng trong View:
+     *   <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+     *
+     * @return string Token vừa sinh.
+     */
+    protected function generateCsrfToken(): string
+    {
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        return $token;
+    }
+
+    /**
+     * Verify CSRF token từ POST so với token lưu trong session.
+     * Xoá token sau khi verify (one-time use) để chống replay attack.
+     *
+     * @param  string $token Token nhận từ POST.
+     * @return bool
+     */
+    private function verifyCsrfToken(string $token): bool
+    {
+        $sessionToken = $_SESSION['csrf_token'] ?? '';
+
+        // Xoá ngay sau khi verify — one-time use
+        unset($_SESSION['csrf_token']);
+
+        // hash_equals() chống timing attack khi so sánh chuỗi bí mật
+        return !empty($sessionToken) && hash_equals($sessionToken, $token);
+    }
+
+    /**
+     * Render trang lỗi hệ thống thay vì để trang trắng.
+     * Dùng khi try-catch bắt được RuntimeException từ Service/Model.
+     *
+     * @param  string $message Thông báo lỗi hiển thị cho admin.
+     * @return void
+     */
+    private function renderSystemError(string $message): void
+    {
+        $content = $this->renderViewToString('admin/error', [
+            'errorMessage' => $message,
+        ]);
+
+        $this->renderView('layouts/admin', [
+            'content'       => $content,
+            'title'         => 'Lỗi hệ thống - Quản trị',
+            'activeMenu'    => '',
+            'adminUsername' => SessionHelper::getSessionUsername() ?? '',
+        ]);
     }
 }
