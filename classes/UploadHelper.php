@@ -62,14 +62,22 @@ class UploadHelper
 
     /**
      * Trả về đường dẫn tuyệt đối đến thư mục upload trên server.
-     * Dùng BASE_PATH nếu đã định nghĩa, fallback về dirname(__DIR__).
+     * Yêu cầu BASE_PATH phải được định nghĩa ở index.php — nhất quán toàn project.
+     * Throw RuntimeException ngay nếu chưa định nghĩa thay vì fallback âm thầm
+     * về dirname(__DIR__) có thể trỏ sai thư mục.
      *
      * @return string Đường dẫn tuyệt đối, có dấu / cuối.
+     * @throws RuntimeException Nếu BASE_PATH chưa được định nghĩa.
      */
     private static function getUploadPath(): string
     {
-        $base = defined('BASE_PATH') ? BASE_PATH : dirname(__DIR__);
-        return $base . '/public/' . self::UPLOAD_DIR;
+        if (!defined('BASE_PATH')) {
+            throw new RuntimeException(
+                'Hằng số BASE_PATH chưa được định nghĩa. Vui lòng định nghĩa trong index.php.'
+            );
+        }
+
+        return BASE_PATH . '/public/' . self::UPLOAD_DIR;
     }
 
 
@@ -148,9 +156,18 @@ class UploadHelper
             ];
         }
 
-        // Upload thành công → xoá file cũ nếu có (khi cập nhật sản phẩm)
+        // Upload thành công → xoá file cũ nếu có (khi cập nhật sản phẩm).
+        // Nếu unlink thất bại: file mới đã lưu thành công, DB sẽ cập nhật tên mới
+        // → không rollback, nhưng log lại để admin biết có file rác cần dọn thủ công.
         if (!empty($oldFile)) {
-            self::deleteProductImage($oldFile);
+            $deleted = self::deleteProductImage($oldFile);
+            if (!$deleted) {
+                error_log(
+                    '[UploadHelper] Không thể xoá file cũ: ' . $oldFile
+                    . ' — file mới đã lưu: ' . $filename
+                    . ' — cần dọn thủ công tại: ' . self::getUploadPath()
+                );
+            }
         }
 
         return [
@@ -212,13 +229,16 @@ class UploadHelper
 
     /**
      * Trả về URL công khai của ảnh sản phẩm để dùng trong View.
-     * Nếu file không tồn tại → trả URL ảnh placeholder mặc định.
+     * Không gọi file_exists() để tránh I/O không cần thiết khi render danh sách.
+     * Nếu filename rỗng → trả placeholder. Ngược lại → trả URL thẳng.
+     * Browser tự fallback về placeholder khi ảnh không tải được qua onerror trong HTML:
      *
      * Cách dùng trong View:
-     *   <img src="<?= UploadHelper::getProductImageUrl($product->getImage()) ?>">
+     *   <img src="<?= UploadHelper::getProductImageUrl($product->getImage()) ?>"
+     *        onerror="this.src='/public/images/placeholder.jpg'">
      *
      * @param  string $filename        Tên file ảnh lưu trong DB.
-     * @param  string $placeholderUrl  URL ảnh mặc định khi không có ảnh.
+     * @param  string $placeholderUrl  URL ảnh mặc định khi filename rỗng.
      * @return string                  URL công khai của ảnh.
      */
     public static function getProductImageUrl(
@@ -229,11 +249,9 @@ class UploadHelper
             return $placeholderUrl;
         }
 
-        $filePath = self::getUploadPath() . basename($filename);
-
-        return file_exists($filePath)
-            ? '/public/' . self::UPLOAD_DIR . basename($filename)
-            : $placeholderUrl;
+        // Trả URL thẳng — không gọi file_exists() để tránh disk I/O lặp lại
+        // khi render danh sách nhiều sản phẩm. Browser tự xử lý ảnh lỗi qua onerror.
+        return '/public/' . self::UPLOAD_DIR . basename($filename);
     }
 
 
