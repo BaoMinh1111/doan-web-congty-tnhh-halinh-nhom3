@@ -4,9 +4,6 @@
  * Class OrderEntity
  *
  * Đại diện cho một đơn hàng trong hệ thống.
- * Chỉ chứa dữ liệu + validate, không chứa logic xử lý nghiệp vụ.
- *
- * @package App\Entities
  */
 class OrderEntity
 {
@@ -21,9 +18,6 @@ class OrderEntity
 
     // ================= CONSTRUCTOR =================
 
-    /**
-     * Khởi tạo từ mảng data (thường từ DB hoặc form)
-     */
     public function __construct(array $data = [])
     {
         $this->id           = $data['id'] ?? null;
@@ -36,36 +30,21 @@ class OrderEntity
 
     // ================= GETTER =================
 
-    public function getId(): ?int
-    {
-        return $this->id;
-    }
-
-    public function getUserId(): int
-    {
-        return $this->user_id;
-    }
-
-    public function getTotalAmount(): float
-    {
-        return $this->total_amount;
-    }
-
-    public function getStatus(): string
-    {
-        return $this->status;
-    }
-
-    public function getCreatedAt(): string
-    {
-        return $this->created_at;
-    }
+    public function getId(): ?int { return $this->id; }
+    public function getUserId(): int { return $this->user_id; }
+    public function getTotalAmount(): float { return $this->total_amount; }
+    public function getStatus(): string { return $this->status; }
+    public function getCreatedAt(): string { return $this->created_at; }
 
 
     // ================= SETTER =================
 
     public function setUserId(int $user_id): void
     {
+        if ($user_id <= 0) {
+            throw new InvalidArgumentException("User không hợp lệ");
+        }
+
         $this->user_id = $user_id;
     }
 
@@ -91,40 +70,42 @@ class OrderEntity
 
     public function setCreatedAt(string $created_at): void
     {
+        if (strtotime($created_at) === false) {
+            throw new InvalidArgumentException("Datetime không hợp lệ");
+        }
+
         $this->created_at = $created_at;
     }
 
 
     // ================= VALIDATE =================
 
-    /**
-     * Validate dữ liệu trước khi lưu DB
-     */
     public function validate(): array
     {
         $errors = [];
 
         if ($this->user_id <= 0) {
-            $errors['user_id'] = 'User không hợp lệ';
+            $errors[] = 'User không hợp lệ';
         }
 
         if ($this->total_amount < 0) {
-            $errors['total_amount'] = 'Tổng tiền phải >= 0';
+            $errors[] = 'Tổng tiền phải >= 0';
         }
 
-        if (empty($this->status)) {
-            $errors['status'] = 'Trạng thái không được để trống';
+        if (!in_array($this->status, ['pending', 'paid', 'cancelled'])) {
+            $errors[] = 'Trạng thái không hợp lệ';
+        }
+
+        if (strtotime($this->created_at) === false) {
+            $errors[] = 'created_at không đúng định dạng';
         }
 
         return $errors;
     }
 
 
-    // ================= TO ARRAY =================
+    // ================= EXPORT =================
 
-    /**
-     * Chuyển object → array (để insert DB)
-     */
     public function toArray(): array
     {
         return [
@@ -134,5 +115,10 @@ class OrderEntity
             'status'       => $this->status,
             'created_at'   => $this->created_at
         ];
+    }
+
+    public function toJson(): string
+    {
+        return json_encode($this->toArray());
     }
 }
