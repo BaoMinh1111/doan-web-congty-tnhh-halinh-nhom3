@@ -7,62 +7,64 @@ class ProductModel extends BaseModel
 {
     protected string $table = "products";
 
+
+    // ================= GET ALL =================
+
     public function getAll(): array
     {
         $sql = "SELECT * FROM {$this->table} ORDER BY id DESC";
         $rows = $this->fetchAll($sql);
 
-        $products = [];
-        foreach ($rows as $row) {
-            $products[] = new ProductEntity($row);
-        }
-
-        return $products;
+        return array_map(fn($row) => new ProductEntity($row), $rows);
     }
+
+
+    // ================= GET BY ID =================
 
     public function getById(int $id): ?ProductEntity
     {
-        $sql = "SELECT * FROM {$this->table} WHERE id = ?";
-        $row = $this->fetchOne($sql, [$id]);
-
-        if (!$row) {
+        if ($id <= 0) {
             return null;
         }
 
-        return new ProductEntity($row);
+        $sql = "SELECT * FROM {$this->table} WHERE id = ?";
+        $row = $this->fetchOne($sql, [$id]);
+
+        return $row ? new ProductEntity($row) : null;
     }
+
+
+    // ================= SEARCH =================
 
     public function search(string $keyword): array
     {
         $keyword = trim($keyword);
 
-        if ($keyword === '') {
-            return [];
-        }
+        if ($keyword === '') return [];
 
         $sql = "SELECT * FROM {$this->table}
                 WHERE name LIKE ? OR description LIKE ?";
 
-        $rows = $this->fetchAll($sql, [
-            "%$keyword%",
-            "%$keyword%"
-        ]);
+        $param = "%$keyword%";
 
-        $products = [];
-        foreach ($rows as $row) {
-            $products[] = new ProductEntity($row);
-        }
+        $rows = $this->fetchAll($sql, [$param, $param]);
 
-        return $products;
+        return array_map(fn($row) => new ProductEntity($row), $rows);
     }
 
-    public function add(array $data): bool
+
+    // ================= ADD =================
+
+    /**
+     * Trả về ID vừa insert (chuẩn hơn bool)
+     */
+    public function add(array $data): int
     {
         $product = new ProductEntity($data);
 
         $errors = $product->validate();
         if (!empty($errors)) {
-            throw new Exception(implode(", ", $errors));
+            throw new InvalidArgumentException(implode(", ", $errors));
         }
 
         $data = $product->toArray();
@@ -80,17 +82,31 @@ class ProductModel extends BaseModel
             $data['stock']
         ]);
 
-        return $stmt->rowCount() > 0;
+        if (!$stmt) {
+            throw new RuntimeException("Lỗi khi thêm sản phẩm");
+        }
+
+        return (int)$this->pdo->lastInsertId();
     }
 
+
+    // ================= UPDATE =================
+
+    /**
+     * Trả true nếu query chạy thành công (KHÔNG phụ thuộc rowCount)
+     */
     public function update(int $id, array $data): bool
     {
+        if ($id <= 0) {
+            throw new InvalidArgumentException("ID không hợp lệ");
+        }
+
         $data['id'] = $id;
         $product = new ProductEntity($data);
 
         $errors = $product->validate();
         if (!empty($errors)) {
-            throw new Exception(implode(", ", $errors));
+            throw new InvalidArgumentException(implode(", ", $errors));
         }
 
         $data = $product->toArray();
@@ -109,15 +125,76 @@ class ProductModel extends BaseModel
             $id
         ]);
 
-        return $stmt->rowCount() >= 0;
+        if (!$stmt) {
+            throw new RuntimeException("Lỗi khi cập nhật sản phẩm");
+        }
+
+        return true; // FIX: không phụ thuộc rowCount
     }
+
+
+    // ================= DELETE =================
 
     public function delete(int $id): bool
     {
-        $sql = "DELETE FROM {$this->table} WHERE id=?";
+        if ($id <= 0) {
+            throw new InvalidArgumentException("ID không hợp lệ");
+        }
 
+        $sql = "DELETE FROM {$this->table} WHERE id=?";
         $stmt = $this->prepareStmt($sql, [$id]);
 
+        if (!$stmt) {
+            throw new RuntimeException("Lỗi khi xoá sản phẩm");
+        }
+
         return $stmt->rowCount() > 0;
+    }
+
+
+    // ================= STOCK =================
+
+    /**
+     * Giảm tồn kho an toàn
+     */
+    public function decreaseStock(int $productId, int $quantity): bool
+    {
+        if ($productId <= 0 || $quantity <= 0) {
+            throw new InvalidArgumentException("Dữ liệu không hợp lệ");
+        }
+
+        $sql = "UPDATE {$this->table}
+                SET stock = stock - ?
+                WHERE id = ? AND stock >= ?";
+
+        $stmt = $this->prepareStmt($sql, [
+            $quantity,
+            $productId,
+            $quantity
+        ]);
+
+        if (!$stmt) {
+            throw new RuntimeException("Lỗi khi trừ kho");
+        }
+
+        return $stmt->rowCount() > 0;
+    }
+
+
+    // ================= TRANSACTION (chuẩn bị cho OrderService) =================
+
+    public function beginTransaction(): void
+    {
+        $this->pdo->beginTransaction();
+    }
+
+    public function commit(): void
+    {
+        $this->pdo->commit();
+    }
+
+    public function rollback(): void
+    {
+        $this->pdo->rollBack();
     }
 }
