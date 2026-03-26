@@ -3,42 +3,100 @@
 /**
  * Class PromotionEntity
  *
- * Entity đại diện bảng promotions
+ * Lớp này đại diện cho 1 mã khuyến mãi
+ * Dùng để:
+ * - Lưu thông tin mã giảm giá
+ * - Kiểm tra điều kiện áp dụng
+ * - Tính số tiền được giảm
+ * 
  */
 class PromotionEntity
 {
-    private ?int $id;
-    private string $code;
-    private string $type;
-    private float $value;
-    private float $minOrder;
-    private ?string $expiredAt;
-    private bool $isActive;
+    // =========================================================================
+    // THUỘC TÍNH
+    // =========================================================================
+    private ?int $id;           // id trong DB
+    private string $code;       // mã giảm giá, vd SALE10
+    private string $type;       // percent | fixed
+    private float $value;       // số tiền giảm hoặc %
+    private float $minOrder;    // đơn tối thiểu để áp dụng
+    private ?string $expiredAt; // ngày hết hạn
+    private bool $isActive;     // còn hoạt động không
+    private string $createdAt;  // ngày tạo
+    private string $updatedAt;  // ngày update cuối
 
 
-    // ================= CONSTRUCTOR =================
+    // =========================================================================
+    // CONSTRUCTOR
+    // =========================================================================
+    /**
+     * Nhận dữ liệu từ DB (array)
+     * Mình làm kiểu giống ProductEntity, dễ map từ DB array
+     */
+    public function __construct(array $data)
+    {
+        // map dữ liệu từ DB hoặc default
+        $this->id   = isset($data['id']) ? (int)$data['id'] : null;
 
-    public function __construct(
-        ?int $id,
-        string $code,
-        string $type,
-        float $value,
-        float $minOrder = 0,
-        ?string $expiredAt = null,
-        bool $isActive = true
-    ) {
-        $this->id        = $id;
-        $this->code      = trim($code);
-        $this->type      = $type;
-        $this->value     = $value;
-        $this->minOrder  = $minOrder;
-        $this->expiredAt = $expiredAt;
-        $this->isActive  = $isActive;
+        $this->code = strtoupper(trim($data['code'] ?? ''));
+        $this->type = strtolower(trim($data['type'] ?? 'fixed'));
+
+        $this->value    = (float)($data['value'] ?? 0);
+        $this->minOrder = (float)($data['min_order'] ?? 0);
+
+        // format ngày hết hạn
+        $this->expiredAt = isset($data['expired_at']) 
+            ? date('Y-m-d H:i:s', strtotime($data['expired_at'])) 
+            : null;
+
+        $this->isActive  = isset($data['is_active']) ? (bool)$data['is_active'] : true;
+
+        // ngày tạo / cập nhật
+        $this->createdAt = $data['created_at'] ?? date('Y-m-d H:i:s');
+        $this->updatedAt = $data['updated_at'] ?? date('Y-m-d H:i:s');
+
+        // kiểm tra dữ liệu hợp lệ ngay khi tạo
+        $this->validate();
     }
 
 
-    // ================= GETTER =================
+    // =========================================================================
+    // VALIDATE
+    // =========================================================================
+    /**
+     * Kiểm tra dữ liệu có hợp lệ không
+     */
+    private function validate(): void
+    {
+        if ($this->code === '' || strlen($this->code) < 3) {
+            throw new InvalidArgumentException("Code không hợp lệ");
+        }
 
+        if (!in_array($this->type, ['percent', 'fixed'])) {
+            throw new InvalidArgumentException("Type sai");
+        }
+
+        if ($this->value <= 0) {
+            throw new InvalidArgumentException("Value phải > 0");
+        }
+
+        if ($this->type === 'percent' && $this->value > 100) {
+            throw new InvalidArgumentException("Percent <= 100");
+        }
+
+        if ($this->minOrder < 0) {
+            throw new InvalidArgumentException("Min order sai");
+        }
+
+        if ($this->expiredAt && strtotime($this->expiredAt) === false) {
+            throw new InvalidArgumentException("Ngày sai");
+        }
+    }
+
+
+    // =========================================================================
+    // GETTER
+    // =========================================================================
     public function getId(): ?int { return $this->id; }
     public function getCode(): string { return $this->code; }
     public function getType(): string { return $this->type; }
@@ -48,57 +106,128 @@ class PromotionEntity
     public function isActive(): bool { return $this->isActive; }
 
 
-    // ================= BUSINESS =================
+    // =========================================================================
+    // SETTER (nếu muốn chỉnh sửa trong code)
+    // =========================================================================
+    public function setValue(float $value): void
+    {
+        if ($value <= 0) {
+            throw new InvalidArgumentException("Value phải > 0");
+        }
+        $this->value = $value;
+        $this->touchUpdatedAt();
+    }
 
+    public function setIsActive(bool $isActive): void
+    {
+        $this->isActive = $isActive;
+        $this->touchUpdatedAt();
+    }
+
+    // cập nhật thời gian mỗi khi set
+    private function touchUpdatedAt(): void
+    {
+        $this->updatedAt = date('Y-m-d H:i:s');
+    }
+
+
+    // =========================================================================
+    // LOGIC DÙNG TRONG CART
+    // =========================================================================
+    /**
+     * Kiểm tra mã có thể dùng không (có active, chưa hết hạn, đủ minOrder)
+     */
+    public function canUse(float $total): bool
+    {
+        if (!$this->isActive) return false;
+        if ($this->isExpired()) return false;
+        if ($total < $this->minOrder) return false;
+
+        return true;
+    }
+
+    /**
+     * Kiểm tra hết hạn
+     */
     public function isExpired(): bool
     {
-        if ($this->expiredAt === null) {
-            return false;
-        }
-
+        if ($this->expiredAt === null) return false;
         return strtotime($this->expiredAt) < time();
     }
 
-    public function validate(): array
+    /**
+     * Tính số tiền được giảm
+     */
+    public function calculateDiscount(float $total): float
     {
-        $errors = [];
+        if (!$this->canUse($total)) return 0;
 
-        if ($this->code === '') {
-            $errors['code'] = 'Code không được rỗng';
+        if ($this->type === 'percent') {
+            $discount = ($total * $this->value) / 100;
+        } else {
+            $discount = $this->value;
         }
 
-        if (!in_array($this->type, ['percent', 'fixed'])) {
-            $errors['type'] = 'Type không hợp lệ';
-        }
+        // không giảm quá tổng tiền
+        return min($discount, $total);
+    }
 
-        if ($this->value <= 0) {
-            $errors['value'] = 'Value phải > 0';
-        }
 
-        if ($this->type === 'percent' && $this->value > 100) {
-            $errors['value'] = 'Percent <= 100';
-        }
+    // =========================================================================
+    // HELPER
+    // =========================================================================
+    /**
+     * Lý do không áp dụng được, dùng để debug hoặc hiển thị
+     */
+    public function getError(float $total): ?string
+    {
+        if (!$this->isActive) return "Mã không hoạt động";
+        if ($this->isExpired()) return "Mã đã hết hạn";
+        if ($total < $this->minOrder) return "Chưa đủ điều kiện";
 
-        if ($this->minOrder < 0) {
-            $errors['min_order'] = 'Min order không hợp lệ';
-        }
+        return null;
+    }
 
-        return $errors;
+    /**
+     * Format giá trị giảm cho hiển thị
+     */
+    public function getFormattedValue(): string
+    {
+        if ($this->type === 'percent') {
+            return $this->value . '%';
+        }
+        return number_format($this->value, 0, ',', '.') . ' VNĐ';
+    }
+
+    /**
+     * Debug nhanh
+     */
+    public function debug(): string
+    {
+        return "Promotion[{$this->code} - {$this->getFormattedValue()}]";
+    }
+
+
+    // =========================================================================
+    // CHUYỂN SANG ARRAY / JSON
+    // =========================================================================
+    public function toArray(): array
+    {
+        return [
+            'id'         => $this->id,
+            'code'       => $this->code,
+            'type'       => $this->type,
+            'value'      => $this->value,
+            'min_order'  => $this->minOrder,
+            'expired_at' => $this->expiredAt,
+            'is_active'  => $this->isActive ? 1 : 0,
+            'created_at' => $this->createdAt,
+            'updated_at' => $this->updatedAt,
+        ];
+    }
+
+    public function toJson(): string
+    {
+        return json_encode($this->toArray());
     }
 }
-
-/* Các vấn đề cần sửa:
-* Không nhất quán với phong cách Entity của toàn dự án:
-Constructor nhận 7 tham số rời rạc → rất khó dùng, dễ sai thứ tự.
-Không có toArray() / toJson() → không thể trả JSON cho AJAX hoặc truyền cho View dễ dàng.
-Không map từ array của DB → PromotionModel phải viết hàm map() thủ công
-* Constructor quá cứng:
-Phải truyền đủ 7 tham số mỗi lần new PromotionEntity(...)
-Không linh hoạt khi DB trả về array (phải map thủ công).
-Không có fallback giá trị mặc định hợp lý (ví dụ $minOrder = 0, $isActive = true chỉ là default ở tham số, không xử lý trong thân hàm).
-* Thiếu các method quan trọng
-* Validate còn yếu:
-code nên uppercase và kiểm tra độ dài.
-Chưa kiểm tra expiredAt có phải datetime hợp lệ không.
-Chưa kiểm tra nếu type = percent thì value phải là số thập phân hợp lý.
-*/
