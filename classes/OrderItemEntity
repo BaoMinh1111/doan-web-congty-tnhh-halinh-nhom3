@@ -3,136 +3,183 @@
 /**
  * Class OrderItemEntity
  *
- * Đại diện cho từng sản phẩm trong đơn hàng.
+ * Đại diện cho một dòng chi tiết trong đơn hàng (1 sản phẩm trong 1 đơn).
+ *
+ * Thêm chức năng:
+ *   - Giảm giá riêng dòng
+ *   - Tính điểm thưởng
+ *   - Kiểm tra tồn kho
+ *
+ * @package App\Entities
  */
 class OrderItemEntity
 {
-    // ================= THUỘC TÍNH =================
-
-    private ?int $id;
-    private int $order_id;
-    private int $product_id;
+    // =========================================================================
+    // NHÓM 1 – CỘT BẢNG order_details
+    // =========================================================================
+    private int $orderId;
+    private int $productId;
     private int $quantity;
-    private float $price;
-    private string $createdAt;
+    private float $priceAtPurchase;
 
+    // =========================================================================
+    // NHÓM 2 – TỪ JOIN products
+    // =========================================================================
+    private ?string $productName;
+    private ?string $productImage;
 
-    // ================= CONSTRUCTOR =================
+    // =========================================================================
+    // NHÓM 3 – TÍNH TOÁN / BUSINESS LOGIC
+    // =========================================================================
+    private float $discount = 0.0;     // giảm giá trên dòng
+    private int $pointsEarned = 0;     // điểm tích lũy cho dòng
+    private bool $inStock = true;      // trạng thái kho
 
-    public function __construct(array $data = [])
+    // =========================================================================
+    // CONSTRUCTOR
+    // =========================================================================
+    public function __construct(array $data)
     {
-        $this->id         = $data['id'] ?? null;
-        $this->order_id   = (int) ($data['order_id'] ?? 0);
-        $this->product_id = (int) ($data['product_id'] ?? 0);
-        $this->quantity   = (int) ($data['quantity'] ?? 1);
-        $this->price      = (float) ($data['price'] ?? 0);
-        $this->createdAt  = $data['created_at'] ?? date('Y-m-d H:i:s');
+        $this->orderId         = $data['order_id'] ?? 0;
+        $this->productId       = $data['product_id'] ?? 0;
+        $this->quantity        = $data['quantity'] ?? 0;
+        $this->priceAtPurchase = $data['price_at_purchase'] ?? 0.0;
+
+        $this->productName  = $data['product_name']  ?? null;
+        $this->productImage = $data['product_image'] ?? null;
     }
 
-
-    // ================= GETTER =================
-
-    public function getId(): ?int { return $this->id; }
-    public function getOrderId(): int { return $this->order_id; }
-    public function getProductId(): int { return $this->product_id; }
+    // =========================================================================
+    // GETTERS – CƠ BẢN
+    // =========================================================================
+    public function getOrderId(): int { return $this->orderId; }
+    public function getProductId(): int { return $this->productId; }
     public function getQuantity(): int { return $this->quantity; }
-    public function getPrice(): float { return $this->price; }
+    public function getPriceAtPurchase(): float { return $this->priceAtPurchase; }
+    public function getProductName(): ?string { return $this->productName; }
+    public function getProductImage(): ?string { return $this->productImage; }
 
-    public function getCreatedAt(): string
-    {
-        return $this->createdAt;
-    }
+    // =========================================================================
+    // BUSINESS LOGIC
+    // =========================================================================
 
-    /**
-     * Tổng tiền item
-     */
+    /** Tổng tiền trước giảm giá */
     public function getSubtotal(): float
     {
-        return $this->price * $this->quantity;
+        return $this->quantity * $this->priceAtPurchase;
     }
 
-
-    // ================= SETTER =================
-
-    public function setOrderId(int $order_id): void
+    /** Áp dụng giảm giá dòng (tối đa bằng subtotal) */
+    public function applyDiscount(float $amount): void
     {
-        if ($order_id <= 0) {
-            throw new InvalidArgumentException("Order không hợp lệ");
-        }
-
-        $this->order_id = $order_id;
+        $this->discount = min($amount, $this->getSubtotal());
     }
 
-    public function setProductId(int $product_id): void
+    /** Lấy tổng tiền sau giảm giá */
+    public function getSubtotalAfterDiscount(): float
     {
-        if ($product_id <= 0) {
-            throw new InvalidArgumentException("Product không hợp lệ");
-        }
-
-        $this->product_id = $product_id;
+        return $this->getSubtotal() - $this->discount;
     }
 
-    public function setQuantity(int $quantity): void
+    /** Tính điểm thưởng theo tỉ lệ tiền / 1000 đồng */
+    public function calculatePoints(float $ratePerCurrency = 1000): void
     {
-        if ($quantity <= 0) {
-            throw new InvalidArgumentException("Số lượng phải > 0");
-        }
-
-        $this->quantity = $quantity;
+        $this->pointsEarned = (int) floor($this->getSubtotalAfterDiscount() / $ratePerCurrency);
     }
 
-    public function setPrice(float $price): void
+    /** Lấy điểm đã tính */
+    public function getPointsEarned(): int
     {
-        if ($price < 0) {
-            throw new InvalidArgumentException("Giá không hợp lệ");
-        }
-
-        $this->price = $price;
+        return $this->pointsEarned;
     }
 
+    /** Gán trạng thái tồn kho */
+    public function setInStock(bool $value): void
+    {
+        $this->inStock = $value;
+    }
 
-    // ================= VALIDATE =================
+    /** Kiểm tra tồn kho */
+    public function isInStock(): bool
+    {
+        return $this->inStock;
+    }
 
+    // =========================================================================
+    // FORMATTING – HỖ TRỢ VIEW
+    // =========================================================================
+    public function getFormattedPrice(): string
+    {
+        return number_format($this->priceAtPurchase, 0, ',', '.') . ' ₫';
+    }
+
+    public function getFormattedSubtotal(): string
+    {
+        return number_format($this->getSubtotal(), 0, ',', '.') . ' ₫';
+    }
+
+    public function getFormattedSubtotalAfterDiscount(): string
+    {
+        return number_format($this->getSubtotalAfterDiscount(), 0, ',', '.') . ' ₫';
+    }
+
+    public function getProductImageUrl(string $default = '/assets/images/no-image.png'): string
+    {
+        return $this->productImage ?? $default;
+    }
+
+    // =========================================================================
+    // VALIDATE
+    // =========================================================================
     public function validate(): array
     {
         $errors = [];
 
-        if ($this->order_id <= 0) {
-            $errors[] = 'Order không hợp lệ';
-        }
-
-        if ($this->product_id <= 0) {
-            $errors[] = 'Sản phẩm không hợp lệ';
-        }
-
-        if ($this->quantity <= 0) {
-            $errors[] = 'Số lượng phải > 0';
-        }
-
-        if ($this->price < 0) {
-            $errors[] = 'Giá phải >= 0';
-        }
+        if ($this->orderId <= 0) $errors['order_id'] = 'order_id không hợp lệ.';
+        if ($this->productId <= 0) $errors['product_id'] = 'product_id không hợp lệ.';
+        if ($this->quantity <= 0) $errors['quantity'] = 'Số lượng phải lớn hơn 0.';
+        if ($this->priceAtPurchase < 0) $errors['price_at_purchase'] = 'Giá sản phẩm không được âm.';
 
         return $errors;
     }
 
-
-    // ================= EXPORT =================
-
+    // =========================================================================
+    // SERIALIZE – AJAX / JSON
+    // =========================================================================
     public function toArray(): array
     {
         return [
-            'id'         => $this->id,
-            'order_id'   => $this->order_id,
-            'product_id' => $this->product_id,
-            'quantity'   => $this->quantity,
-            'price'      => $this->price,
-            'created_at' => $this->createdAt
+            'order_id'              => $this->orderId,
+            'product_id'            => $this->productId,
+            'quantity'              => $this->quantity,
+            'price_at_purchase'     => $this->priceAtPurchase,
+            'product_name'          => $this->productName,
+            'product_image'         => $this->productImage,
+            'subtotal'              => $this->getSubtotal(),
+            'formatted_price'       => $this->getFormattedPrice(),
+            'formatted_subtotal'    => $this->getFormattedSubtotal(),
+            'discount'              => $this->discount,
+            'subtotal_after_discount'=> $this->getSubtotalAfterDiscount(),
+            'formatted_subtotal_after_discount'=> $this->getFormattedSubtotalAfterDiscount(),
+            'points_earned'         => $this->pointsEarned,
+            'in_stock'              => $this->inStock,
         ];
     }
 
     public function toJson(): string
     {
-        return json_encode($this->toArray());
+        return json_encode($this->toArray(), JSON_UNESCAPED_UNICODE);
+    }
+
+    // =========================================================================
+    // FACTORY – DỮ LIỆU INSERT
+    // =========================================================================
+    public function toInsertData(): array
+    {
+        return [
+            'product_id'        => $this->productId,
+            'quantity'          => $this->quantity,
+            'price_at_purchase' => $this->priceAtPurchase,
+        ];
     }
 }
