@@ -4,9 +4,6 @@
  * Class OrderItemEntity
  *
  * Đại diện cho từng sản phẩm trong đơn hàng.
- * Mỗi OrderItem thuộc về một Order.
- *
- * @package App\Entities
  */
 class OrderItemEntity
 {
@@ -17,13 +14,11 @@ class OrderItemEntity
     private int $product_id;
     private int $quantity;
     private float $price;
+    private string $createdAt;
 
 
     // ================= CONSTRUCTOR =================
 
-    /**
-     * Khởi tạo từ mảng data
-     */
     public function __construct(array $data = [])
     {
         $this->id         = $data['id'] ?? null;
@@ -31,38 +26,25 @@ class OrderItemEntity
         $this->product_id = (int) ($data['product_id'] ?? 0);
         $this->quantity   = (int) ($data['quantity'] ?? 1);
         $this->price      = (float) ($data['price'] ?? 0);
+        $this->createdAt  = $data['created_at'] ?? date('Y-m-d H:i:s');
     }
 
 
     // ================= GETTER =================
 
-    public function getId(): ?int
-    {
-        return $this->id;
-    }
+    public function getId(): ?int { return $this->id; }
+    public function getOrderId(): int { return $this->order_id; }
+    public function getProductId(): int { return $this->product_id; }
+    public function getQuantity(): int { return $this->quantity; }
+    public function getPrice(): float { return $this->price; }
 
-    public function getOrderId(): int
+    public function getCreatedAt(): string
     {
-        return $this->order_id;
-    }
-
-    public function getProductId(): int
-    {
-        return $this->product_id;
-    }
-
-    public function getQuantity(): int
-    {
-        return $this->quantity;
-    }
-
-    public function getPrice(): float
-    {
-        return $this->price;
+        return $this->createdAt;
     }
 
     /**
-     * Tổng tiền của item = price * quantity
+     * Tổng tiền item
      */
     public function getSubtotal(): float
     {
@@ -74,11 +56,19 @@ class OrderItemEntity
 
     public function setOrderId(int $order_id): void
     {
+        if ($order_id <= 0) {
+            throw new InvalidArgumentException("Order không hợp lệ");
+        }
+
         $this->order_id = $order_id;
     }
 
     public function setProductId(int $product_id): void
     {
+        if ($product_id <= 0) {
+            throw new InvalidArgumentException("Product không hợp lệ");
+        }
+
         $this->product_id = $product_id;
     }
 
@@ -103,38 +93,32 @@ class OrderItemEntity
 
     // ================= VALIDATE =================
 
-    /**
-     * Validate dữ liệu trước khi lưu DB
-     */
     public function validate(): array
     {
         $errors = [];
 
         if ($this->order_id <= 0) {
-            $errors['order_id'] = 'Order không hợp lệ';
+            $errors[] = 'Order không hợp lệ';
         }
 
         if ($this->product_id <= 0) {
-            $errors['product_id'] = 'Sản phẩm không hợp lệ';
+            $errors[] = 'Sản phẩm không hợp lệ';
         }
 
         if ($this->quantity <= 0) {
-            $errors['quantity'] = 'Số lượng phải > 0';
+            $errors[] = 'Số lượng phải > 0';
         }
 
         if ($this->price < 0) {
-            $errors['price'] = 'Giá phải >= 0';
+            $errors[] = 'Giá phải >= 0';
         }
 
         return $errors;
     }
 
 
-    // ================= TO ARRAY =================
+    // ================= EXPORT =================
 
-    /**
-     * Chuyển object → array (để insert DB)
-     */
     public function toArray(): array
     {
         return [
@@ -142,7 +126,13 @@ class OrderItemEntity
             'order_id'   => $this->order_id,
             'product_id' => $this->product_id,
             'quantity'   => $this->quantity,
-            'price'      => $this->price
+            'price'      => $this->price,
+            'created_at' => $this->createdAt
         ];
+    }
+
+    public function toJson(): string
+    {
+        return json_encode($this->toArray());
     }
 }
