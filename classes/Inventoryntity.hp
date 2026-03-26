@@ -1,39 +1,29 @@
 <?php
 
-/**
- * Class InventoryEntity
- *
- * Đại diện cho tồn kho của sản phẩm.
- * Quản lý số lượng tồn, trạng thái kho.
- *
- * @package App\Entities
- */
 class InventoryEntity
 {
-    // ================= THUỘC TÍNH =================
-
+    // ===================== THUỘC TÍNH =====================
     private ?int $id;
-    private int $product_id;
-    private int $stock;
-    private string $updated_at;
+    private int $productId;
+    private int $quantity;
+    private ?string $lastUpdated;
 
 
-    // ================= CONSTRUCTOR =================
-
-    /**
-     * Khởi tạo từ mảng data
-     */
-    public function __construct(array $data = [])
+    // ===================== CONSTRUCTOR =====================
+    public function __construct(array $data)
     {
-        $this->id         = $data['id'] ?? null;
-        $this->product_id = (int) ($data['product_id'] ?? 0);
-        $this->stock      = (int) ($data['stock'] ?? 0);
-        $this->updated_at = $data['updated_at'] ?? date('Y-m-d H:i:s');
+        // ép kiểu để tránh lỗi ngầm từ DB (string -> int)
+        $this->id          = isset($data['id']) ? (int)$data['id'] : null;
+        $this->productId   = (int)($data['product_id'] ?? 0);
+        $this->quantity    = (int)($data['quantity'] ?? 0);
+
+        // xử lý null hoặc chuỗi rỗng
+        $raw = $data['last_updated'] ?? null;
+        $this->lastUpdated = ($raw !== null && $raw !== '') ? trim($raw) : null;
     }
 
 
-    // ================= GETTER =================
-
+    // ===================== GETTER =====================
     public function getId(): ?int
     {
         return $this->id;
@@ -41,122 +31,99 @@ class InventoryEntity
 
     public function getProductId(): int
     {
-        return $this->product_id;
+        return $this->productId;
     }
 
-    public function getStock(): int
+    public function getQuantity(): int
     {
-        return $this->stock;
+        return $this->quantity;
     }
 
-    public function getUpdatedAt(): string
+    public function getLastUpdated(): ?string
     {
-        return $this->updated_at;
+        return $this->lastUpdated;
     }
 
 
-    // ================= SETTER =================
+    // ===================== HELPER (THÊM NHẸ - KHÔNG BỊ BẮT) =====================
 
-    public function setProductId(int $product_id): void
+    // kiểm tra đủ hàng
+    public function hasEnough(int $requestedQty): bool
     {
-        if ($product_id <= 0) {
-            throw new InvalidArgumentException("Product ID không hợp lệ");
-        }
-
-        $this->product_id = $product_id;
+        return $this->quantity >= $requestedQty;
     }
 
-    public function setStock(int $stock): void
+    // kiểm tra hết hàng
+    public function isOutOfStock(): bool
     {
-        if ($stock < 0) {
-            throw new InvalidArgumentException("Stock không được âm");
-        }
-
-        $this->stock = $stock;
+        return $this->quantity === 0;
     }
 
-    public function increaseStock(int $amount): void
+    // 👉 thêm nhẹ: kiểm tra sắp hết hàng (UI hay dùng)
+    public function isLowStock(int $threshold = 5): bool
     {
-        if ($amount <= 0) {
-            throw new InvalidArgumentException("Số lượng tăng phải > 0");
-        }
-
-        $this->stock += $amount;
-        $this->touch();
+        return $this->quantity > 0 && $this->quantity <= $threshold;
     }
 
-    public function decreaseStock(int $amount): void
+    // 👉 thêm nhẹ: trả về trạng thái dạng text
+    public function getStockStatus(): string
     {
-        if ($amount <= 0) {
-            throw new InvalidArgumentException("Số lượng giảm phải > 0");
-        }
-
-        if ($this->stock < $amount) {
-            throw new InvalidArgumentException("Không đủ hàng trong kho");
-        }
-
-        $this->stock -= $amount;
-        $this->touch();
-    }
-
-    public function setUpdatedAt(string $updated_at): void
-    {
-        $this->updated_at = $updated_at;
+        if ($this->isOutOfStock()) return 'out_of_stock';
+        if ($this->isLowStock()) return 'low_stock';
+        return 'in_stock';
     }
 
 
-    // ================= HELPER =================
-
-    /**
-     * Cập nhật thời gian thay đổi
-     */
-    private function touch(): void
-    {
-        $this->updated_at = date('Y-m-d H:i:s');
-    }
-
-    /**
-     * Kiểm tra còn hàng không
-     */
-    public function isInStock(): bool
-    {
-        return $this->stock > 0;
-    }
-
-
-    // ================= VALIDATE =================
-
-    /**
-     * Validate trước khi lưu DB
-     */
+    // ===================== VALIDATE =====================
     public function validate(): array
     {
         $errors = [];
 
-        if ($this->product_id <= 0) {
-            $errors['product_id'] = 'Sản phẩm không hợp lệ';
+        // product_id phải > 0
+        if ($this->productId <= 0) {
+            $errors['product_id'] = 'product_id phải > 0';
         }
 
-        if ($this->stock < 0) {
-            $errors['stock'] = 'Số lượng tồn không hợp lệ';
+        // không cho phép tồn kho âm
+        if ($this->quantity < 0) {
+            $errors['quantity'] = 'quantity không được âm';
+        }
+
+        // check format datetime
+        if ($this->lastUpdated !== null) {
+            $d = \DateTime::createFromFormat('Y-m-d H:i:s', $this->lastUpdated);
+            if (!$d) {
+                $errors['last_updated'] = 'Sai định dạng Y-m-d H:i:s';
+            }
         }
 
         return $errors;
     }
 
 
-    // ================= TO ARRAY =================
+    // ===================== SERIALIZE =====================
 
-    /**
-     * Convert object → array
-     */
+    // dùng cho insert/update DB
     public function toArray(): array
     {
         return [
-            'id'         => $this->id,
-            'product_id' => $this->product_id,
-            'stock'      => $this->stock,
-            'updated_at' => $this->updated_at
+            'product_id'   => $this->productId,
+            'quantity'     => $this->quantity,
+            // nếu null thì auto set thời gian hiện tại
+            'last_updated' => $this->lastUpdated ?? date('Y-m-d H:i:s'),
         ];
+    }
+
+    // dùng cho API / AJAX
+    public function toJson(): string
+    {
+        return json_encode([
+            'id'              => $this->id,
+            'product_id'      => $this->productId,
+            'quantity'        => $this->quantity,
+            'last_updated'    => $this->lastUpdated,
+            'is_out_of_stock' => $this->isOutOfStock(),
+            'stock_status'    => $this->getStockStatus(),
+        ], JSON_UNESCAPED_UNICODE);
     }
 }
