@@ -1,200 +1,261 @@
 <?php
 
-require_once "BaseModel.php";
-require_once "ProductEntity.php";
-
+/**
+ * Class ProductModel
+ *
+ * Quản lý sản phẩm: CRUD, phân trang, search, liên kết tồn kho và khuyến mãi,
+ * thống kê, type-safe với ProductEntity.
+ *
+ * @package App\Models
+ */
 class ProductModel extends BaseModel
 {
-    protected string $table = "products";
+    protected string $table = 'products';
+    protected string $primaryKey = 'id';
+    protected string $defaultOrder = 'created_at DESC';
 
+    private InventoryModel $inventoryModel;
+    private PromotionModel $promotionModel;
 
-    // ================= GET ALL =================
-
-    public function getAll(): array
+    public function __construct()
     {
-        $sql = "SELECT * FROM {$this->table} ORDER BY id DESC";
-        $rows = $this->fetchAll($sql);
-
-        return array_map(fn($row) => new ProductEntity($row), $rows);
+        parent::__construct();
+        $this->inventoryModel = new InventoryModel();
+        $this->promotionModel = new PromotionModel();
     }
 
+    // =========================================================================
+    // CRUD
+    // =========================================================================
 
-    // ================= GET BY ID =================
+    /**
+     * Tạo sản phẩm mới
+     *
+     * @param array $data
+     *   required: name, price
+     *   optional: sku, description, is_active
+     * @return int ID sản phẩm mới
+     */
+    public function insertProduct(array $data): int
+    {
+        $data['is_active'] = $data['is_active'] ?? 1;
+        $data['created_at'] = date('Y-m-d H:i:s');
 
+        // insert trả về auto-increment ID
+        return $this->insert($data);
+    }
+
+    /**
+     * Cập nhật sản phẩm theo ID
+     *
+     * @param int $id
+     * @param array $data
+     * @return bool
+     */
+    public function updateProduct(int $id, array $data): bool
+    {
+        $data['updated_at'] = date('Y-m-d H:i:s');
+        return $this->update($id, $data);
+    }
+
+    /**
+     * Soft delete: chỉ đánh dấu không active
+     *
+     * @param int $id
+     * @return bool
+     */
+    public function deleteProduct(int $id): bool
+    {
+        return $this->updateProduct($id, ['is_active' => 0]);
+    }
+
+    /**
+     * Hard delete: xóa hẳn bản ghi
+     *
+     * @param int $id
+     * @return bool
+     */
+    public function hardDeleteProduct(int $id): bool
+    {
+        return parent::delete($id);
+    }
+
+    // =========================================================================
+    // LẤY DỮ LIỆU
+    // =========================================================================
+
+    /**
+     * Lấy sản phẩm theo ID
+     *
+     * @param int $id
+     * @return ProductEntity|null
+     */
     public function getById(int $id): ?ProductEntity
     {
-        if ($id <= 0) {
-            return null;
-        }
-
-        $sql = "SELECT * FROM {$this->table} WHERE id = ?";
-        $row = $this->fetchOne($sql, [$id]);
-
+        $row = $this->fetchOne("SELECT * FROM {$this->table} WHERE id = ?", [$id]);
         return $row ? new ProductEntity($row) : null;
     }
 
-
-    // ================= SEARCH =================
-
-    public function search(string $keyword): array
+    /**
+     * Lấy tất cả sản phẩm
+     *
+     * @param bool $onlyActive
+     * @return ProductEntity[]
+     */
+    public function getAll(bool $onlyActive = true): array
     {
-        $keyword = trim($keyword);
+        $sql = "SELECT * FROM {$this->table}";
+        if ($onlyActive) $sql .= " WHERE is_active = 1";
+        $sql .= " ORDER BY {$this->defaultOrder}";
 
-        if ($keyword === '') return [];
-
-        $sql = "SELECT * FROM {$this->table}
-                WHERE name LIKE ? OR description LIKE ?";
-
-        $param = "%$keyword%";
-
-        $rows = $this->fetchAll($sql, [$param, $param]);
-
-        return array_map(fn($row) => new ProductEntity($row), $rows);
+        $rows = $this->fetchAll($sql);
+        return array_map(fn($r) => new ProductEntity($r), $rows);
     }
-
-
-    // ================= ADD =================
 
     /**
-     * Trả về ID vừa insert (chuẩn hơn bool)
+     * Tìm sản phẩm theo tên hoặc SKU
+     *
+     * @param string $keyword
+     * @param bool $onlyActive
+     * @return ProductEntity[]
      */
-    public function add(array $data): int
+    public function search(string $keyword, bool $onlyActive = true): array
     {
-        $product = new ProductEntity($data);
-
-        $errors = $product->validate();
-        if (!empty($errors)) {
-            throw new InvalidArgumentException(implode(", ", $errors));
+        $sql = "SELECT * FROM {$this->table} WHERE (name LIKE ? OR sku LIKE ?)";
+        $params = ["%$keyword%", "%$keyword%"];
+        if ($onlyActive) {
+            $sql .= " AND is_active = 1";
         }
+        $sql .= " ORDER BY {$this->defaultOrder}";
 
-        $data = $product->toArray();
-
-        $sql = "INSERT INTO {$this->table}
-                (name, price, description, image, category_id, stock)
-                VALUES (?, ?, ?, ?, ?, ?)";
-
-        $stmt = $this->prepareStmt($sql, [
-            $data['name'],
-            $data['price'],
-            $data['description'],
-            $data['image'],
-            $data['category_id'],
-            $data['stock']
-        ]);
-
-        if (!$stmt) {
-            throw new RuntimeException("Lỗi khi thêm sản phẩm");
-        }
-
-        return (int)$this->pdo->lastInsertId();
+        $rows = $this->fetchAll($sql, $params);
+        return array_map(fn($r) => new ProductEntity($r), $rows);
     }
-
-
-    // ================= UPDATE =================
 
     /**
-     * Trả true nếu query chạy thành công (KHÔNG phụ thuộc rowCount)
+     * Phân trang sản phẩm
+     *
+     * @param int $page
+     * @param int $limit
+     * @param bool $onlyActive
+     * @return array ['data' => ProductEntity[], 'total' => int, 'totalPages' => int, 'currentPage' => int]
      */
-    public function update(int $id, array $data): bool
+    public function paginate(int $page = 1, int $limit = 10, bool $onlyActive = true): array
     {
-        if ($id <= 0) {
-            throw new InvalidArgumentException("ID không hợp lệ");
-        }
+        $page = max(1, $page);
+        $limit = max(1, $limit);
+        $offset = ($page - 1) * $limit;
 
-        $data['id'] = $id;
-        $product = new ProductEntity($data);
+        $where = $onlyActive ? 'WHERE is_active = 1' : '';
+        $total = (int)($this->fetchOne("SELECT COUNT(*) AS cnt FROM {$this->table} {$where}")['cnt'] ?? 0);
 
-        $errors = $product->validate();
-        if (!empty($errors)) {
-            throw new InvalidArgumentException(implode(", ", $errors));
-        }
+        $sql = "SELECT * FROM {$this->table} {$where} ORDER BY {$this->defaultOrder} LIMIT {$limit} OFFSET {$offset}";
+        $rows = $this->fetchAll($sql);
+        $data = array_map(fn($r) => new ProductEntity($r), $rows);
 
-        $data = $product->toArray();
-
-        $sql = "UPDATE {$this->table}
-                SET name=?, price=?, description=?, image=?, category_id=?, stock=?
-                WHERE id=?";
-
-        $stmt = $this->prepareStmt($sql, [
-            $data['name'],
-            $data['price'],
-            $data['description'],
-            $data['image'],
-            $data['category_id'],
-            $data['stock'],
-            $id
-        ]);
-
-        if (!$stmt) {
-            throw new RuntimeException("Lỗi khi cập nhật sản phẩm");
-        }
-
-        return true; // FIX: không phụ thuộc rowCount
+        return [
+            'data' => $data,
+            'total' => $total,
+            'totalPages' => (int)ceil($total / $limit),
+            'currentPage' => $page,
+        ];
     }
 
-
-    // ================= DELETE =================
-
-    public function delete(int $id): bool
-    {
-        if ($id <= 0) {
-            throw new InvalidArgumentException("ID không hợp lệ");
-        }
-
-        $sql = "DELETE FROM {$this->table} WHERE id=?";
-        $stmt = $this->prepareStmt($sql, [$id]);
-
-        if (!$stmt) {
-            throw new RuntimeException("Lỗi khi xoá sản phẩm");
-        }
-
-        return $stmt->rowCount() > 0;
-    }
-
-
-    // ================= STOCK =================
+    // =========================================================================
+    // INVENTORY & STOCK
+    // =========================================================================
 
     /**
-     * Giảm tồn kho an toàn
+     * Kiểm tra tồn kho của sản phẩm
+     *
+     * @param int $productId
+     * @param int $requiredQty
+     * @return bool
      */
-    public function decreaseStock(int $productId, int $quantity): bool
+    public function checkStock(int $productId, int $requiredQty): bool
     {
-        if ($productId <= 0 || $quantity <= 0) {
-            throw new InvalidArgumentException("Dữ liệu không hợp lệ");
+        $inventory = $this->inventoryModel->getByProductId($productId);
+        if ($inventory === null) return false;
+        return $inventory->getQuantity() >= $requiredQty;
+    }
+
+    /**
+     * Giảm tồn kho sản phẩm
+     *
+     * @param int $productId
+     * @param int $qty
+     * @return bool
+     */
+    public function decreaseStock(int $productId, int $qty): bool
+    {
+        return $this->inventoryModel->decreaseStock($productId, $qty);
+    }
+
+    // =========================================================================
+    // PROMOTION
+    // =========================================================================
+
+    /**
+     * Áp dụng khuyến mãi cho sản phẩm
+     *
+     * @param ProductEntity $product
+     * @param int|null $promotionId
+     * @return float Giá sau khuyến mãi
+     */
+    public function applyPromotion(ProductEntity $product, ?int $promotionId): float
+    {
+        $price = $product->getPrice();
+
+        if ($promotionId === null) return $price;
+
+        $promo = $this->promotionModel->getById($promotionId);
+        if ($promo === null) return $price;
+
+        if ($promo['type'] === 'percent') {
+            $price *= (100 - $promo['value']) / 100;
+        } elseif ($promo['type'] === 'fixed') {
+            $price -= $promo['value'];
         }
 
-        $sql = "UPDATE {$this->table}
-                SET stock = stock - ?
-                WHERE id = ? AND stock >= ?";
+        return max(0, $price);
+    }
 
-        $stmt = $this->prepareStmt($sql, [
-            $quantity,
-            $productId,
-            $quantity
-        ]);
+    // =========================================================================
+    // THỐNG KÊ
+    // =========================================================================
 
-        if (!$stmt) {
-            throw new RuntimeException("Lỗi khi trừ kho");
+    /**
+     * Đếm tổng sản phẩm
+     *
+     * @return int
+     */
+    public function countAll(): int
+    {
+        return (int)($this->fetchOne("SELECT COUNT(*) AS cnt FROM {$this->table}")['cnt'] ?? 0);
+    }
+
+    /**
+     * Đếm sản phẩm còn hàng
+     *
+     * @return int
+     */
+    public function countInStock(): int
+    {
+        $rows = $this->inventoryModel->getAll(); // trả InventoryEntity[]
+        $cnt = 0;
+        foreach ($rows as $inv) {
+            if ($inv->getQuantity() > 0) $cnt++;
         }
-
-        return $stmt->rowCount() > 0;
+        return $cnt;
     }
 
-
-    // ================= TRANSACTION (chuẩn bị cho OrderService) =================
-
-    public function beginTransaction(): void
+    /**
+     * Đếm sản phẩm hết hàng
+     *
+     * @return int
+     */
+    public function countOutOfStock(): int
     {
-        $this->pdo->beginTransaction();
-    }
-
-    public function commit(): void
-    {
-        $this->pdo->commit();
-    }
-
-    public function rollback(): void
-    {
-        $this->pdo->rollBack();
+        return $this->countAll() - $this->countInStock();
     }
 }
