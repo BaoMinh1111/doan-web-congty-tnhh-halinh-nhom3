@@ -276,3 +276,21 @@ class OrderService
         return $customerId;
     }
 }
+
+/* Các vấn đề cần sửa:
+* getById() trả PromotionEntity nhưng truy cập $promo['type'] và $promo['value'] như mảng: Entity không phải array — PHP ném Cannot use object of type 
+PromotionEntity as array. Phải dùng $promo->getType() và $promo->getValue(). Hoặc tốt hơn: bỏ hẳn đoạn tự tính, gọi $promo->calculateDiscount($totalPrice).
+* Tự tính discount trong Service thay vì dùng PromotionEntity::calculateDiscount(): Logic tính discount đã có trong Entity. Viết lại ở Service là duplicate — 
+nếu sau này thay đổi công thức phải sửa 2 chỗ. Gọi $discount = $promo->calculateDiscount($totalPrice) là đủ.
+*  Không gọi canUse() trước khi áp promotion — không kiểm tra hết hạn, minOrder, isActive: Mã hết hạn hoặc inactive vẫn được áp dụng bình thường. 
+Phải gọi $promo->canUse($totalPrice) trước, nếu false thì trả lỗi với $promo->getFailMessage($totalPrice).
+* Nhận ?int $promotionId từ ngoài — người dùng không biết ID, họ chỉ biết code: 
+Form checkout luôn có ô nhập mã giảm giá dạng string (SALE10), không phải ID. Nên đổi tham số thành ?string $promotionCode rồi dùng getByCode() thay vì getById().
+* Không gọi increaseUsedCount() sau khi đơn hàng tạo thành công: Mã được áp dụng nhưng used_count không tăng → mã có max_uses=1 vẫn dùng được mãi. 
+Gọi increaseUsedCount() ngoài transaction, sau SessionHelper::clearCart().
+* Áp promotion trước transaction nhưng check tồn kho cũng trước transaction — có khoảng hở race condition: 2 request đồng thời có thể cùng pass check tồn kho 
+rồi cùng tạo đơn. Việc trừ tồn kho bên trong transaction đã giảm thiểu, nhưng check promotion nên thực hiện lại bên trong transaction để đảm bảo used_count 
+chưa vượt max_uses.
+* resolveCustomer() gọi $this->customerModel->update() trực tiếp thay vì updateInfo() — bỏ qua validate: CustomerModel::updateInfo() có validate qua Entity 
+trước khi update. Gọi update() thẳng bỏ qua bước đó — dữ liệu bẩn có thể ghi vào DB.
+*/
