@@ -6,139 +6,221 @@ require_once 'BaseModel.php';
 /**
  * Class PromotionModel
  *
- * Quản lý các mã khuyến mãi trong hệ thống
- * - Lấy, tạo, sửa, xoá promotion
- * - Kiểm tra điều kiện áp dụng, tính discount
- * - Áp dụng cho đơn hàng (có transaction)
+ * Ý tưởng thiết kế:
+ * - Model chịu trách nhiệm làm việc với Database (CRUD)
+ * - Entity chịu trách nhiệm validate + business logic
+ * - Model không viết lại logic tính toán → chỉ gọi Entity
+ *
+ * Mục tiêu:
+ * - Tách rõ trách nhiệm (Single Responsibility)
+ * - Tránh duplicate logic
+ * - Dễ bảo trì và mở rộng
  */
 class PromotionModel extends BaseModel
 {
     // =========================================================================
     // THUỘC TÍNH CƠ BẢN
     // =========================================================================
-    protected string $table = 'promotions';         // tên bảng trong DB
-    protected string $primaryKey = 'id';            // primary key của bảng
-    protected string $defaultOrder = 'created_at DESC'; // sắp xếp mặc định khi lấy danh sách
+    protected string $table = 'promotions';
+    protected string $primaryKey = 'id';
+    protected string $defaultOrder = 'created_at DESC';
+
 
     // =========================================================================
     // LẤY DỮ LIỆU
     // =========================================================================
 
-    /** Lấy promotion theo ID */
+    /**
+     * Lấy promotion theo ID
+     *
+     * Cách làm:
+     * - Không dùng method không tồn tại (find)
+     * - Dùng fetchOne để đảm bảo tương thích BaseModel
+     */
     public function getById(int $id): ?PromotionEntity
     {
-        $row = $this->find($id);                     // dùng BaseModel::find để lấy 1 dòng theo id
-        return $row ? new PromotionEntity($row) : null; // map sang Entity để dùng method validate, calculate...
-    }
-
-    /** Lấy promotion theo code (dành cho checkout) */
-    public function getByCode(string $code): ?PromotionEntity
-    {
-        $code = strtoupper(trim($code));            // chuẩn hoá code: remove space + uppercase
         $row = $this->fetchOne(
-            "SELECT * FROM {$this->table} WHERE code = ? LIMIT 1",
-            [$code]                                   // dùng prepared statement tránh SQL Injection
+            "SELECT * FROM {$this->table} WHERE id = ? LIMIT 1",
+            [$id]
         );
+
+        // nếu có dữ liệu thì map sang Entity
         return $row ? new PromotionEntity($row) : null;
     }
 
-    /** Lấy tất cả promotion (dành cho admin) */
-    public function getAll(): array
+
+    /**
+     * Lấy promotion theo code
+     *
+     * Ý tưởng:
+     * - Chuẩn hoá code trước khi query (tránh lỗi do nhập thường/hoa)
+     * - Dùng prepared statement để chống SQL Injection
+     */
+    public function getByCode(string $code): ?PromotionEntity
     {
-        $rows = $this->fetchAll("SELECT * FROM {$this->table} ORDER BY {$this->defaultOrder}");
-        return array_map(fn($r) => new PromotionEntity($r), $rows); // map tất cả thành Entity
+        $code = strtoupper(trim($code));
+
+        $row = $this->fetchOne(
+            "SELECT * FROM {$this->table} WHERE code = ? LIMIT 1",
+            [$code]
+        );
+
+        return $row ? new PromotionEntity($row) : null;
     }
 
-    /** Lấy tất cả promotion đang active (chưa expired và đã start) */
+
+    /**
+     * Lấy toàn bộ promotion
+     */
+    public function getAll(): array
+    {
+        $rows = $this->fetchAll(
+            "SELECT * FROM {$this->table} ORDER BY {$this->defaultOrder}"
+        );
+
+        // map toàn bộ sang Entity để đảm bảo dùng chung logic
+        return array_map(fn($r) => new PromotionEntity($r), $rows);
+    }
+
+
+    /**
+     * Lấy promotion đang hoạt động
+     *
+     * Ý tưởng:
+     * - Filter ngay tại DB để giảm dữ liệu trả về
+     * - Tránh phải filter lại ở PHP
+     */
     public function getActivePromotions(): array
     {
-        $now = date('Y-m-d H:i:s'); // thời điểm hiện tại
+        $now = date('Y-m-d H:i:s');
+
         $rows = $this->fetchAll(
-            "SELECT * FROM {$this->table} 
-             WHERE is_active=1 
-               AND (start_date IS NULL OR start_date <= ?) 
+            "SELECT * FROM {$this->table}
+             WHERE is_active = 1
+               AND (start_date IS NULL OR start_date <= ?)
                AND (expired_at IS NULL OR expired_at > ?)
              ORDER BY {$this->defaultOrder}",
             [$now, $now]
         );
+
         return array_map(fn($r) => new PromotionEntity($r), $rows);
     }
+
 
     // =========================================================================
     // CRUD
     // =========================================================================
 
-    /** Tạo mới promotion */
+    /**
+     * Tạo promotion
+     *
+     * Cách làm:
+     * - Tạo Entity → validate → insert
+     * - Không insert trực tiếp array để tránh dữ liệu bẩn
+     */
     public function create(array $data): int
     {
-        $entity = new PromotionEntity($data);       // tạo Entity từ input
+        $entity = new PromotionEntity($data);
 
-        if (!$entity->isValid()) {                  // validate dữ liệu cơ bản
+        if (!$entity->isValid()) {
+            // không trả lỗi thô → đảm bảo an toàn
             throw new RuntimeException("Dữ liệu promotion không hợp lệ");
         }
 
-        return $this->insert($entity->toArray());   // insert vào DB dùng BaseModel
+        return $this->insert($entity->toArray());
     }
 
-    /** Cập nhật promotion */
+
+    /**
+     * Cập nhật promotion
+     *
+     * Ý tưởng:
+     * - Merge dữ liệu cũ + mới
+     * - Tránh mất dữ liệu chưa update
+     */
     public function updatePromotion(int $id, array $data): bool
     {
-        $existing = $this->getById($id);           // lấy promotion hiện tại
+        $existing = $this->getById($id);
         if (!$existing) return false;
 
-        $entity = new PromotionEntity(array_merge($existing->toArray(), $data)); // merge data mới + cũ
+        $entity = new PromotionEntity(
+            array_merge($existing->toArray(), $data)
+        );
 
-        if (!$entity->isValid()) {                 // validate
+        if (!$entity->isValid()) {
             throw new RuntimeException("Dữ liệu promotion không hợp lệ");
         }
 
-        return $this->update($id, $entity->toArray()); // update vào DB
+        return $this->update($id, $entity->toArray());
     }
 
-    /** Xoá promotion */
+
+    /**
+     * Xoá promotion
+     */
     public function deletePromotion(int $id): bool
     {
-        return $this->delete($id);                 // xoá đơn giản bằng BaseModel
+        return $this->delete($id);
     }
 
+
     // =========================================================================
-    // BUSINESS LOGIC (ÁP DỤNG MÃ)
+    // BUSINESS LOGIC
     // =========================================================================
 
     /**
-     * Áp dụng mã promotion cho tổng tiền
-     * @param string $code Mã khuyến mãi
-     * @param float $total Tổng tiền đơn hàng
-     * @param bool $increaseUsed Có tăng số lần đã dùng hay không
-     * @return array kết quả gồm success, message, discount, final
+     * Áp dụng mã khuyến mãi
+     *
+     * Ý tưởng chính:
+     * - Tất cả nằm trong 1 transaction → đảm bảo dữ liệu nhất quán
+     * - Không gọi transaction lồng nhau
+     * - Không đọc rồi ghi → dùng SQL atomic
      */
     public function applyCode(string $code, float $total, bool $increaseUsed = true): array
     {
-        return $this->transaction(function () use ($code, $total, $increaseUsed) { // wrap transaction
+        return $this->transaction(function () use ($code, $total, $increaseUsed) {
 
-            $promotion = $this->getByCode($code);  // lấy promotion theo code
+            // B1: Lấy promotion
+            $promotion = $this->getByCode($code);
 
             if (!$promotion) {
-                return ['success' => false, 'message' => 'Mã không tồn tại', 'discount' => 0, 'final' => $total];
+                return [
+                    'success' => false,
+                    'message' => 'Mã không tồn tại',
+                    'discount' => 0,
+                    'final' => $total
+                ];
             }
 
-            // kiểm tra đủ điều kiện áp dụng
+            // B2: Kiểm tra điều kiện (Entity xử lý)
             if (!$promotion->canUse($total)) {
                 return [
                     'success'  => false,
-                    'message'  => $promotion->getFailMessage(), // message chi tiết từ Entity
+                    'message'  => $promotion->getFailMessage(),
                     'discount' => 0,
                     'final'    => $total
                 ];
             }
 
-            // tính discount (Entity chịu trách nhiệm)
+            // B3: Tính discount
             $discount = $promotion->calculateDiscount($total);
-            $final = max(0, $total - $discount);       // final không được âm
+            $final = max(0, $total - $discount);
 
-            // tăng số lần đã dùng nếu cần
+            /**
+             * B4: Tăng số lần sử dụng
+             *
+             * Cách làm:
+             * - Không gọi method khác để tránh transaction lồng nhau
+             * - Không đọc used_count trước
+             * - Dùng SQL atomic → tránh race condition
+             */
             if ($increaseUsed) {
-                $this->increaseUsedCount($promotion->getId());
+                $this->execute(
+                    "UPDATE {$this->table}
+                     SET used_count = used_count + 1
+                     WHERE id = ?",
+                    [$promotion->getId()]
+                );
             }
 
             return [
@@ -150,62 +232,46 @@ class PromotionModel extends BaseModel
         });
     }
 
-    /** Tăng số lần đã dùng của mã */
-    public function increaseUsedCount(int $id, int $count = 1): bool
-    {
-        return $this->transaction(function () use ($id, $count) {
-
-            $promotion = $this->getById($id);       // lấy entity
-            if (!$promotion) return false;
-
-            $used = $promotion->getUsedCount() + $count;  // cộng thêm số lần sử dụng
-            return $this->update($id, ['used_count' => $used]); // lưu lại DB
-        });
-    }
 
     // =========================================================================
-    // HELPER / CHECK
+    // HELPER
     // =========================================================================
 
-    /** Kiểm tra promotion còn active */
-    public function isActive(int $id): bool
+    /**
+     * Lấy trạng thái promotion (gom lại 1 lần query)
+     *
+     * Ý tưởng:
+     * - Tránh gọi nhiều method gây nhiều query
+     * - Lấy Entity 1 lần → dùng lại
+     */
+    public function getStatus(int $id): ?array
     {
         $promotion = $this->getById($id);
-        return $promotion ? $promotion->isActive() : false;
+        if (!$promotion) return null;
+
+        return [
+            'isActive' => $promotion->isActive(),
+            'isExpired' => $promotion->isExpired(),
+            'isLimit' => $promotion->hasReachedUsageLimit()
+        ];
     }
 
-    /** Kiểm tra promotion đã expired */
-    public function isExpired(int $id): bool
-    {
-        $promotion = $this->getById($id);
-        return $promotion ? $promotion->isExpired() : true;
-    }
 
-    /** Kiểm tra promotion đã đạt max_uses */
-    public function hasReachedUsageLimit(int $id): bool
-    {
-        $promotion = $this->getById($id);
-        return $promotion ? $promotion->hasReachedUsageLimit() : true;
-    }
-
-    /** Áp dụng nhiều mã cùng lúc, trả về từng kết quả */
+    /**
+     * Áp dụng nhiều mã
+     *
+     * Ý tưởng:
+     * - Chỉ check logic
+     * - Không tăng used_count
+     */
     public function applyMultipleCodes(array $codes, float $total): array
     {
         $results = [];
+
         foreach ($codes as $code) {
-            $results[$code] = $this->applyCode($code, $total, false); // check nhưng không tăng used_count
+            $results[$code] = $this->applyCode($code, $total, false);
         }
+
         return $results;
     }
 }
-
-/* Các vấn đề cần sửa:
-* getById() gọi $this->find() — BaseModel không có method find(), chỉ có getById(): Gọi method không tồn tại
-* increaseUsedCount() mở transaction riêng — nhưng applyCode() đã gọi nó bên trong transaction của chính nó: Nested transaction trong MySQL thực ra không 
-tồn tại — BEGIN lồng nhau sẽ tự động COMMIT transaction cha. BaseModel có check inTransaction() và throw RuntimeException → applyCode() sẽ crash khi 
-gọi increaseUsedCount(). Cần tách logic tăng count ra method private không dùng transaction.
-* increaseUsedCount() có race condition — đọc rồi cộng rồi ghi, 2 request đồng thời có thể cộng sai: Thay vì đọc used_count rồi +1 trong PHP, nên dùng 
-SQL atomic: UPDATE promotions SET used_count = used_count + ? WHERE id = ?. Không cần đọc Entity trước, không có khoảng hở giữa đọc và ghi.
-* isActive(), isExpired(), hasReachedUsageLimit() mỗi cái query DB 1 lần — gọi cả 3 tốn 3 query cho cùng 1 promotion: Nếu cần check cả 3, nên lấy Entity 1 lần 
-rồi gọi method trên Entity. 3 helper method này không cần thiết nếu đã có Entity — bỏ đi hoặc gộp thành getStatus(int $id): array.
-*/
