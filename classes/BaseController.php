@@ -312,6 +312,43 @@ abstract class BaseController
     }
 
 
+    // CSRF PROTECTION
+
+    /**
+     * Sinh CSRF token mới và lưu vào session.
+     * Gọi khi render bất kỳ form nào cần bảo vệ — truyền token vào view.
+     *
+     * Cách dùng trong Controller:
+     *   'csrf_token' => $this->generateCsrfToken()
+     *
+     * Cách dùng trong View:
+     *   <input type="hidden" name="csrf_token" value="<?= $csrf_token ?>">
+     *
+     * @return string Token vừa sinh.
+     */
+    protected function generateCsrfToken(): string
+    {
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token'] = $token;
+        return $token;
+    }
+
+    /**
+     * Verify CSRF token từ POST so với token lưu trong session.
+     * Xoá token sau khi verify (one-time use) để chống replay attack.
+     * Dùng hash_equals() để chống timing attack.
+     *
+     * @param  string $token Token nhận từ POST.
+     * @return bool
+     */
+    protected function verifyCsrfToken(string $token): bool
+    {
+        $sessionToken = $_SESSION['csrf_token'] ?? '';
+        unset($_SESSION['csrf_token']); // one-time use
+        return !empty($sessionToken) && hash_equals($sessionToken, $token);
+    }
+
+
     // KIỂM TRA REQUEST
 
     /**
