@@ -334,10 +334,3 @@ class UploadHelper
         return true;
     }
 }
-
-/* Các vấn đề của sửa:
-* Xoá file cũ sau khi upload thành công — nếu move_uploaded_file thành công nhưng unlink thất bại thì file cũ còn lại, DB đã cập nhật tên mới → không nhất quán
-* Nên dùng BASE_PATH thay fallback dirname(__DIR__) để nhất quán toàn project.
-* getProductImageUrl() gọi file_exists() mỗi lần render — với danh sách 50 sản phẩm thì gọi 50 lần I/O: nên bỏ file_exists() và luôn trả URL
-để browser tự fallback bằng onerror trong HTML.
-*/
