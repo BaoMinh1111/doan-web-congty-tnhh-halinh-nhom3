@@ -132,13 +132,17 @@ class UploadHelper
             return ['success' => false, 'filename' => null, 'message' => $extError];
         }
 
-        // Bước 5: Tạo tên file duy nhất
+        // Bước 5: Tạo tên file duy nhất bằng CSPRNG — không dựa vào timestamp
+        // như uniqid() nên không bị trùng dù 2 request xử lý cùng microsecond.
         $ext      = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-        $filename = uniqid('product_', true) . '.' . $ext;
+        $filename = 'product_' . bin2hex(random_bytes(16)) . '.' . $ext;
 
-        // Bước 6: Đảm bảo thư mục đích tồn tại
+        // Bước 6: Đảm bảo thư mục đích tồn tại.
+        // Check is_dir() lần 2 sau mkdir() để xử lý race condition:
+        // nếu 2 request tạo thư mục đồng thời, cái sau mkdir() thất bại
+        // nhưng thư mục đã tồn tại → is_dir() lần 2 trả true → không báo lỗi.
         $uploadPath = self::getUploadPath();
-        if (!is_dir($uploadPath) && !mkdir($uploadPath, 0755, true)) {
+        if (!is_dir($uploadPath) && !mkdir($uploadPath, 0755, true) && !is_dir($uploadPath)) {
             return [
                 'success'  => false,
                 'filename' => null,
@@ -178,8 +182,10 @@ class UploadHelper
     }
 
     /**
-     * Kiểm tra có file được upload trong request không.
-     * Dùng để phân biệt "người dùng không chọn file" với "có lỗi upload".
+     * Kiểm tra có file được upload thành công trong request không.
+     * Chỉ trả true khi file upload hoàn toàn hợp lệ (UPLOAD_ERR_OK).
+     * Các trường hợp lỗi (size quá lớn, upload một phần, ...) trả false —
+     * để uploadProductImage() xử lý và trả thông báo lỗi cụ thể.
      *
      * Cách dùng:
      *   if (UploadHelper::hasFile($_FILES['image'])) {
@@ -187,11 +193,11 @@ class UploadHelper
      *   }
      *
      * @param  array $file Phần tử từ $_FILES.
-     * @return bool
+     * @return bool        true chỉ khi file đã upload thành công hoàn toàn.
      */
     public static function hasFile(array $file): bool
     {
-        return isset($file['error']) && $file['error'] !== UPLOAD_ERR_NO_FILE;
+        return isset($file['tmp_name']) && ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK;
     }
 
 
@@ -230,15 +236,16 @@ class UploadHelper
     /**
      * Trả về URL công khai của ảnh sản phẩm để dùng trong View.
      * Không gọi file_exists() để tránh I/O không cần thiết khi render danh sách.
-     * Nếu filename rỗng → trả placeholder. Ngược lại → trả URL thẳng.
-     * Browser tự fallback về placeholder khi ảnh không tải được qua onerror trong HTML:
+     * Sanitize và validate $filename trước khi build URL — chặn path traversal
+     * và các ký tự nguy hiểm dù DB có bị inject giá trị bất thường.
+     * Browser tự fallback về placeholder qua onerror trong HTML khi ảnh không tải được.
      *
      * Cách dùng trong View:
      *   <img src="<?= UploadHelper::getProductImageUrl($product->getImage()) ?>"
      *        onerror="this.src='/public/images/placeholder.jpg'">
      *
      * @param  string $filename        Tên file ảnh lưu trong DB.
-     * @param  string $placeholderUrl  URL ảnh mặc định khi filename rỗng.
+     * @param  string $placeholderUrl  URL ảnh mặc định khi filename rỗng hoặc không hợp lệ.
      * @return string                  URL công khai của ảnh.
      */
     public static function getProductImageUrl(
@@ -249,9 +256,16 @@ class UploadHelper
             return $placeholderUrl;
         }
 
-        // Trả URL thẳng — không gọi file_exists() để tránh disk I/O lặp lại
-        // khi render danh sách nhiều sản phẩm. Browser tự xử lý ảnh lỗi qua onerror.
-        return '/public/' . self::UPLOAD_DIR . basename($filename);
+        // Bước 1: basename() chặn path traversal
+        $filename = basename($filename);
+
+        // Bước 2: Validate chỉ chứa ký tự an toàn — chữ cái, số, gạch dưới, gạch ngang, dấu chấm.
+        // Nếu không khớp (VD: DB bị inject ký tự lạ) → trả placeholder thay vì build URL bất thường.
+        if (!preg_match('/^[a-zA-Z0-9_\-\.]+$/', $filename)) {
+            return $placeholderUrl;
+        }
+
+        return '/public/' . self::UPLOAD_DIR . $filename;
     }
 
 
@@ -334,16 +348,3 @@ class UploadHelper
         return true;
     }
 }
-
-/* Các vấn đề cần sửa:
-* uniqid() không đủ ngẫu nhiên — hai request cùng lúc trong cùng microsecond có thể sinh tên file trùng nhau: Thay bằng bin2hex(random_bytes(16)) — sinh chuỗi 32 
-ký tự hex thực sự ngẫu nhiên, không phụ thuộc timestamp. uniqid(true) thêm entropy nhưng vẫn dựa trên microtime nên vẫn có rủi ro trên server đa luồng.
-* hasFile() chỉ check error !== UPLOAD_ERR_NO_FILE — nếu PHP trả UPLOAD_ERR_INI_SIZE thì hasFile() vẫn trả true, Controller sẽ gọi uploadProductImage() và nhận 
-lỗi, nhưng logic hơi khó đọc: Đổi thành return isset($file['tmp_name']) && $file['error'] === UPLOAD_ERR_OK — rõ ràng hơn: hasFile() chỉ trả true khi file thực sự 
-upload thành công, còn lỗi thì để uploadProductImage() xử lý riêng sau.
-* mkdir() không kiểm tra race condition — hai request đồng thời cùng tạo thư mục, cái sau sẽ fail dù thư mục đã tồn tại: Thêm kiểm tra sau mkdir(): 
-if (!is_dir($uploadPath) && !mkdir($uploadPath, 0755, true) && !is_dir($uploadPath)) — check lại is_dir() lần hai để bắt trường hợp thư mục vừa được tạo bởi 
-request song song.
-* getProductImageUrl() không sanitize $filename — nếu DB bị inject giá trị có ../ thì URL trả ra có thể trỏ sai, dù basename() đã chặn phần nào: Thêm 
-$filename = basename($filename) rồi validate chỉ chứa ký tự an toàn: preg_match('/^[a-zA-Z0-9_\-\.]+$/', $filename). Nếu không khớp thì trả $placeholderUrl luôn.
-*/
