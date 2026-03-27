@@ -219,3 +219,16 @@ class CartController extends BaseController
         }
     }
 }
+
+/* Các vấn đề cần sửa:
+* Tất cả method có kiểu trả về void nhưng bên trong lại dùng return $this->handle(...) và return $this->json(...): handle() và json() đều trả void — return void
+trong PHP 8 không lỗi nhưng gây nhầm lẫn và một số static analyzer sẽ báo lỗi. Đổi thành return; sau mỗi lần gọi, hoặc bỏ return ở những chỗ là dòng cuối cùng.
+* update() gọi $this->remove() khi quantity = 0 — nhưng remove() lại đọc lại $_POST['product_id'] từ đầu: 
+Nếu product_id có trong request thì vẫn đúng. Nhưng nếu sau này remove() thay đổi cách lấy input thì update() bị ảnh hưởng ngầm. Nên gọi thẳng 
+$this->cartService->remove($productId) thay vì gọi method khác của Controller.
+* catch (Throwable $e) trả message lỗi thô ra client — lộ thông tin nội bộ: $e->getMessage() có thể chứa tên bảng, SQL, đường dẫn file. 
+Nên log nội bộ và trả message chung: error_log($e->getMessage()); $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
+* getInput() không sanitize — chỉ trim(), không qua ValidatorHelper::sanitizeInput(): Với product_id và quantity thì cast (int) đã đủ an toàn. 
+Nhưng nếu sau này thêm input dạng string (ghi chú, mã giảm giá) thì getInput() không sanitize XSS. Nên thêm sanitize hoặc dùng $this->post() / $this->get() 
+từ BaseController thay vì tự viết lại.
+*/
