@@ -231,3 +231,20 @@ class PromotionEntity
         return json_encode($this->toArray());
     }
 }
+
+/* Các vấn đề cần sửa:
+* validate() được gọi trong constructor — nếu dữ liệu từ DB bị thiếu code thì throw exception, không thể tạo Entity để hiển thị lỗi thân thiện: Khi Model 
+gọi new PromotionEntity($row) từ DB mà dữ liệu cũ/thiếu → throw InvalidArgumentException → crash cả trang admin. Nên đổi validate() thành public, gọi 
+thủ công từ Model trước khi insert/update, không gọi trong constructor.
+* PromotionModel dùng $promotion->getFailMessage() nhưng Entity không có method này — chỉ có getError(): 
+Tên không khớp giữa Model và Entity → Fatal Error khi áp mã giảm giá. Đổi tên getError() thành getFailMessage() hoặc ngược lại, chọn 1 tên dùng nhất quán.
+* PromotionModel dùng $promotion->isValid() nhưng Entity không có method này: Model gọi method không tồn tại → crash khi tạo/cập nhật promotion. 
+Cần thêm public function isValid(): bool hoặc đổi Model dùng validate() và bắt exception.
+* expiredAt dùng strtotime() để format — nếu DB lưu NULL thì strtotime(null) trả false, date('Y-m-d H:i:s', false) ra ngày sai: Đã có check isset() nhưng 
+nếu DB trả về chuỗi '0000-00-00 00:00:00' (MySQL default) thì strtotime() ra timestamp âm → isExpired() luôn trả true. Nên thêm check: 
+if ($data['expired_at'] === '0000-00-00 00:00:00') $this->expiredAt = null;
+* validate() message lỗi quá ngắn — "Type sai", "Ngày sai" không đủ thông tin để debug: 
+Nên ghi rõ giá trị nhận được: "Type không hợp lệ: '{$this->type}', chỉ chấp nhận 'percent' hoặc 'fixed'". Tiết kiệm thời gian debug rất nhiều.
+* . Thiếu $maxUses và $usedCount — PromotionModel gọi getUsedCount() nhưng Entity không có thuộc tính này: Thiếu 2 thuộc tính quan trọng trong thiết kế ban đầu. 
+hasReachedUsageLimit() và canUse() không check được giới hạn lần dùng. Cần thêm $maxUses, $usedCount và getUsedCount(), hasReachedUsageLimit().
+*/
