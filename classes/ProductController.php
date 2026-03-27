@@ -172,3 +172,17 @@ class ProductController extends BaseController
         ]);
     }
 }
+
+/* Các vấn đề cần sửa:
+* require_once nằm trong Controller: Xóa dòng này, để bootstrap.php hoặc autoloader lo. Controller không nên biết đường dẫn file trên disk.
+* Thiếu return sau cả hai lời gọi redirect() trong detail(): Thêm return; ngay sau mỗi $this->redirect(...)
+* search() cho phép không truyền cả keyword lẫn category → trả 400. Nhưng trang chủ gọi AJAX khi user mới gõ 1-2 ký tự — validation này có thể chặn UX tìm kiếm 
+realtime: Bỏ điều kiện cứng keyword === '' && categoryId <= 0. Thay bằng: nếu cả hai rỗng thì trả toàn bộ sản phẩm (hoặc trả mảng rỗng). Để FE quyết định khi nào 
+bắt đầu gọi AJAX.
+* Biến $categories được khai báo bên trong try nhưng dùng bên ngoài — nếu catch chạy thì $categories undefined, PHP 8 sẽ warning: Khai báo $results = []; 
+$categories = []; trước khối try. Hoặc chuyển toàn bộ phần build response vào trong try luôn.
+* search() gọi getAllCategories() mỗi lần user gõ — nếu tìm kiếm realtime thì mỗi keystroke tạo 1 query DB lấy danh mục, dữ liệu không đổi: Gọi getAllCategories() 
+một lần duy nhất khi trang load (từ HomeController), lưu vào JS variable phía FE. Endpoint search() chỉ trả data sản phẩm, không cần kèm categories mỗi lần.
+* detail() không kiểm tra isGet() — endpoint render view nhận cả POST, PUT... mà không báo lỗi: Thêm check đầu method: 
+if (!$this->isGet()) { $this->redirect('/'); return; } — nhất quán với cách search() đang làm.
+*/
