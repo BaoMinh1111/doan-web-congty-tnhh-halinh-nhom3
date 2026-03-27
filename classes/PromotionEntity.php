@@ -2,27 +2,56 @@
 
 /**
  * Class PromotionEntity
+ *
+ * Ý tưởng thiết kế:
+ * - Lớp này đại diện cho 1 mã khuyến mãi (promotion)
+ * - Chỉ xử lý dữ liệu + logic nội tại (không gọi DB)
+ * - Dùng chung cho nhiều nơi: Model, Controller, Service
+ *
+ * Mục tiêu:
+ * - Tránh crash khi dữ liệu DB lỗi
+ * - Dễ validate khi thêm / sửa
+ * - Gom toàn bộ logic áp mã vào 1 class
  */
 class PromotionEntity
 {
     // =========================================================================
-    // THUỘC TÍNH
+    // THUỘC TÍNH CƠ BẢN
     // =========================================================================
-    private ?int $id;
-    private string $code;
-    private string $type;       // percent | fixed
-    private float $value;
-    private float $minOrder;
-    private ?string $expiredAt;
-    private bool $isActive;
-    private string $createdAt;
-    private string $updatedAt;
+    private ?int $id;           // id trong database (có thể null nếu chưa insert)
 
-    // Giới hạn số lần sử dụng
+    private string $code;       // mã giảm giá (vd: SALE10)
+    private string $type;       // loại giảm: percent | fixed
+    private float $value;       // giá trị giảm (% hoặc tiền)
+    private float $minOrder;    // giá trị đơn tối thiểu để áp mã
+
+    private ?string $expiredAt; // thời gian hết hạn (có thể null nếu không giới hạn)
+
+    private bool $isActive;     // trạng thái hoạt động (true = dùng được)
+
+    private string $createdAt;  // ngày tạo
+    private string $updatedAt;  // ngày cập nhật
+
+
+    // =========================================================================
+    // GIỚI HẠN SỬ DỤNG
+    // =========================================================================
+    /**
+     * Một số mã giảm giá có giới hạn số lần dùng:
+     * - maxUses = null → không giới hạn
+     * - usedCount → đã dùng bao nhiêu lần
+     */
     private ?int $maxUses;
     private int $usedCount;
 
-    // Lưu thông báo lỗi để sử dụng khi validate hoặc apply
+
+    // =========================================================================
+    // BIẾN LƯU LỖI
+    // =========================================================================
+    /**
+     * Dùng để lưu lý do lỗi khi validate hoặc apply
+     * → Controller có thể lấy ra để hiển thị cho user
+     */
     private ?string $failMessage = null;
 
 
@@ -30,39 +59,51 @@ class PromotionEntity
     // CONSTRUCTOR
     // =========================================================================
     /**
-     * Nhận dữ liệu dạng array từ database
-     * Mapping trực tiếp sang thuộc tính của object
+     * Nhận dữ liệu từ DB (array)
+     *
+     * Cách làm:
+     * - Mapping trực tiếp từ array sang object
+     * - Không validate tại đây để tránh crash khi dữ liệu DB không hợp lệ
      */
     public function __construct(array $data)
     {
-        $this->id   = isset($data['id']) ? (int)$data['id'] : null;
+        // ép kiểu để đảm bảo đúng type
+        $this->id = isset($data['id']) ? (int)$data['id'] : null;
 
+        // chuẩn hóa code: bỏ khoảng trắng + viết hoa
         $this->code = strtoupper(trim($data['code'] ?? ''));
+
+        // chuẩn hóa type: viết thường để so sánh dễ
         $this->type = strtolower(trim($data['type'] ?? 'fixed'));
 
         $this->value    = (float)($data['value'] ?? 0);
         $this->minOrder = (float)($data['min_order'] ?? 0);
 
+
         /**
-         * Xử lý ngày hết hạn:
-         * - Nếu NULL hoặc '0000-00-00 00:00:00' thì xem như không giới hạn
-         * - Tránh lỗi strtotime khi dữ liệu không hợp lệ
+         * Xử lý expired_at:
+         * - DB có thể trả về null hoặc '0000-00-00 00:00:00'
+         * - Nếu không xử lý → strtotime lỗi → sai logic hết hạn
          */
-        if (!empty($data['expired_at']) && $data['expired_at'] !== '0000-00-00 00:00:00') {
+        if (!empty($data['expired_at']) 
+            && $data['expired_at'] !== '0000-00-00 00:00:00'
+            && strtotime($data['expired_at']) !== false
+        ) {
             $this->expiredAt = date('Y-m-d H:i:s', strtotime($data['expired_at']));
         } else {
             $this->expiredAt = null;
         }
 
+        // trạng thái hoạt động
         $this->isActive = isset($data['is_active']) ? (bool)$data['is_active'] : true;
 
+        // thời gian
         $this->createdAt = $data['created_at'] ?? date('Y-m-d H:i:s');
         $this->updatedAt = $data['updated_at'] ?? date('Y-m-d H:i:s');
 
+
         /**
-         * Thông tin giới hạn lượt sử dụng
-         * - max_uses có thể NULL (không giới hạn)
-         * - used_count mặc định = 0
+         * Thông tin giới hạn sử dụng
          */
         $this->maxUses   = isset($data['max_uses']) ? (int)$data['max_uses'] : null;
         $this->usedCount = isset($data['used_count']) ? (int)$data['used_count'] : 0;
@@ -74,10 +115,17 @@ class PromotionEntity
     // =========================================================================
     /**
      * Kiểm tra dữ liệu hợp lệ
-     * Trả về true/false thay vì throw exception để dễ kiểm soát luồng xử lý
+     *
+     * Cách làm:
+     * - Trả về true/false
+     * - Không throw exception để tránh crash
+     * - Lưu lỗi vào failMessage
      */
     public function isValid(): bool
     {
+        // reset lỗi trước mỗi lần kiểm tra
+        $this->failMessage = null;
+
         if ($this->code === '' || strlen($this->code) < 3) {
             $this->failMessage = "Code không hợp lệ: '{$this->code}'";
             return false;
@@ -89,22 +137,17 @@ class PromotionEntity
         }
 
         if ($this->value <= 0) {
-            $this->failMessage = "Giá trị giảm phải > 0, hiện tại: {$this->value}";
+            $this->failMessage = "Value phải > 0, hiện tại: {$this->value}";
             return false;
         }
 
         if ($this->type === 'percent' && $this->value > 100) {
-            $this->failMessage = "Giảm theo % không được vượt quá 100";
+            $this->failMessage = "Percent không được > 100";
             return false;
         }
 
         if ($this->minOrder < 0) {
-            $this->failMessage = "Đơn tối thiểu không hợp lệ";
-            return false;
-        }
-
-        if ($this->expiredAt && strtotime($this->expiredAt) === false) {
-            $this->failMessage = "Ngày hết hạn không hợp lệ";
+            $this->failMessage = "Min order không hợp lệ";
             return false;
         }
 
@@ -112,7 +155,7 @@ class PromotionEntity
     }
 
     /**
-     * Lấy thông báo lỗi gần nhất
+     * Lấy thông báo lỗi
      */
     public function getFailMessage(): ?string
     {
@@ -121,21 +164,7 @@ class PromotionEntity
 
 
     // =========================================================================
-    // GETTER
-    // =========================================================================
-    public function getId(): ?int { return $this->id; }
-    public function getCode(): string { return $this->code; }
-    public function getType(): string { return $this->type; }
-    public function getValue(): float { return $this->value; }
-    public function getMinOrder(): float { return $this->minOrder; }
-    public function getExpiredAt(): ?string { return $this->expiredAt; }
-    public function isActive(): bool { return $this->isActive; }
-    public function getUsedCount(): int { return $this->usedCount; }
-    public function getMaxUses(): ?int { return $this->maxUses; }
-
-
-    // =========================================================================
-    // LOGIC NGHIỆP VỤ
+    // LOGIC ÁP DỤNG MÃ
     // =========================================================================
     /**
      * Kiểm tra mã đã hết hạn chưa
@@ -147,7 +176,7 @@ class PromotionEntity
     }
 
     /**
-     * Kiểm tra đã đạt giới hạn sử dụng chưa
+     * Kiểm tra đã hết lượt sử dụng chưa
      */
     public function hasReachedUsageLimit(): bool
     {
@@ -156,10 +185,17 @@ class PromotionEntity
     }
 
     /**
-     * Kiểm tra có thể áp dụng cho đơn hàng hay không
+     * Kiểm tra có thể dùng cho đơn hàng không
+     *
+     * Ý tưởng:
+     * - Gom tất cả điều kiện vào 1 function
+     * - Tránh viết rải rác nhiều nơi
      */
     public function canUse(float $total): bool
     {
+        // reset lỗi
+        $this->failMessage = null;
+
         if (!$this->isActive) {
             $this->failMessage = "Mã không hoạt động";
             return false;
@@ -176,7 +212,7 @@ class PromotionEntity
         }
 
         if ($total < $this->minOrder) {
-            $this->failMessage = "Đơn hàng chưa đạt giá trị tối thiểu";
+            $this->failMessage = "Chưa đủ điều kiện áp dụng";
             return false;
         }
 
@@ -185,6 +221,12 @@ class PromotionEntity
 
     /**
      * Tính số tiền được giảm
+     *
+     * Cách làm:
+     * - Kiểm tra điều kiện trước
+     * - Nếu percent → tính %
+     * - Nếu fixed → giảm trực tiếp
+     * - Không cho giảm quá tổng tiền
      */
     public function calculateDiscount(float $total): float
     {
@@ -194,7 +236,6 @@ class PromotionEntity
             ? ($total * $this->value) / 100
             : $this->value;
 
-        // đảm bảo không giảm quá tổng tiền
         return min($discount, $total);
     }
 
@@ -202,6 +243,9 @@ class PromotionEntity
     // =========================================================================
     // HELPER
     // =========================================================================
+    /**
+     * Format để hiển thị UI
+     */
     public function getFormattedValue(): string
     {
         return $this->type === 'percent'
@@ -211,7 +255,7 @@ class PromotionEntity
 
 
     // =========================================================================
-    // SERIALIZE
+    // CHUYỂN DỮ LIỆU
     // =========================================================================
     public function toArray(): array
     {
@@ -232,6 +276,6 @@ class PromotionEntity
 
     public function toJson(): string
     {
-        return json_encode($this->toArray(), JSON_UNESCAPED_UNICODE);
+        return json_encode($this->toArray());
     }
 }
