@@ -334,3 +334,16 @@ class UploadHelper
         return true;
     }
 }
+
+/* Các vấn đề cần sửa:
+* uniqid() không đủ ngẫu nhiên — hai request cùng lúc trong cùng microsecond có thể sinh tên file trùng nhau: Thay bằng bin2hex(random_bytes(16)) — sinh chuỗi 32 
+ký tự hex thực sự ngẫu nhiên, không phụ thuộc timestamp. uniqid(true) thêm entropy nhưng vẫn dựa trên microtime nên vẫn có rủi ro trên server đa luồng.
+* hasFile() chỉ check error !== UPLOAD_ERR_NO_FILE — nếu PHP trả UPLOAD_ERR_INI_SIZE thì hasFile() vẫn trả true, Controller sẽ gọi uploadProductImage() và nhận 
+lỗi, nhưng logic hơi khó đọc: Đổi thành return isset($file['tmp_name']) && $file['error'] === UPLOAD_ERR_OK — rõ ràng hơn: hasFile() chỉ trả true khi file thực sự 
+upload thành công, còn lỗi thì để uploadProductImage() xử lý riêng sau.
+* mkdir() không kiểm tra race condition — hai request đồng thời cùng tạo thư mục, cái sau sẽ fail dù thư mục đã tồn tại: Thêm kiểm tra sau mkdir(): 
+if (!is_dir($uploadPath) && !mkdir($uploadPath, 0755, true) && !is_dir($uploadPath)) — check lại is_dir() lần hai để bắt trường hợp thư mục vừa được tạo bởi 
+request song song.
+* getProductImageUrl() không sanitize $filename — nếu DB bị inject giá trị có ../ thì URL trả ra có thể trỏ sai, dù basename() đã chặn phần nào: Thêm 
+$filename = basename($filename) rồi validate chỉ chứa ký tự an toàn: preg_match('/^[a-zA-Z0-9_\-\.]+$/', $filename). Nếu không khớp thì trả $placeholderUrl luôn.
+*/
