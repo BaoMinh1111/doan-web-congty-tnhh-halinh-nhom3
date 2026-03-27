@@ -109,3 +109,14 @@ class HomeController extends BaseController
         ]);
     }
 }
+
+/* Các vấn đề cần sửa: 
+* byCategory() không có return sau redirect() — pattern giống lỗi đã chỉ ở ProductController: Không crash vì redirect() gọi exit, nhưng cần thêm return; 
+ngay sau để ý định rõ ràng và an toàn khi refactor. 
+* byCategory() tìm $currentCategory bằng foreach trên $categories đã lấy — thừa 1 vòng lặp: Đã có $categories rồi nên không tốn thêm DB query. 
+Nhưng vẫn có thể gọn hơn bằng cách thêm getCategoryById() vào ProductService, hoặc dùng array_filter.
+* index() gọi 3 query DB riêng biệt: getFeatured(), getProductsWithCategory(), getAllCategories(): getProductsWithCategory() đã JOIN với categories — 
+getAllCategories() có thể query lại bảng categories
+* byCategory() dùng searchAndFilter('', $categoryId) để lấy sản phẩm theo danh mục — dùng sai method: searchAndFilter được thiết kế cho tìm kiếm, không phải 
+lọc danh mục đơn thuần. Nên có ProductService::getByCategory($categoryId) riêng — rõ ý định hơn và dễ tối ưu query sau này.
+*/
