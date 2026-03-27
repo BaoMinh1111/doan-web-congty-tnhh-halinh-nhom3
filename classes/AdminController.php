@@ -438,19 +438,3 @@ class AdminController extends BaseController
         );
     }
 }
-
-/* Các vấn đề cần sửa: 
-* deleteProduct() vẫn xóa ảnh trước xóa DB — nếu deleteProduct() throw exception thì ảnh đã mất nhưng record DB còn nguyên, dữ liệu broken: Đảo thứ tự: xóa DB 
-trước, chỉ xóa ảnh khi DB thành công. $deleted = $this->productService->deleteProduct($id); if ($deleted) { UploadHelper::deleteProductImage(...); }
-* Thiếu return sau các lời gọi redirect() trong editProduct() và deleteProduct(): Thêm return; ngay sau mỗi $this->redirect(...)
-* generateCsrfToken() và verifyCsrfToken() nằm trong AdminController — logic CSRF nên ở BaseController để các Controller khác cũng dùng được: Chuyển cả hai method 
-lên BaseController (đổi protected). CartController, AuthController sau này cũng cần CSRF — không nên lặp code.
-* manageProducts() sau khi gọi jsonResponse() trong nhánh AJAX vẫn tiếp tục chạy xuống renderViewToString() — jsonResponse() có exit nhưng không tường minh: Thêm 
-return; sau $this->jsonResponse(...) trong nhánh isAjax()
-* adminUsername vẫn lặp lại ở mọi lời gọi renderView('layouts/admin'): Tạo private function renderAdmin(string $view, array $data, string $title, 
-string $activeMenu): void — gộp renderViewToString + renderView layouts/admin + adminUsername vào 1 chỗ. Xuất hiện 6 lần trong file này.
-*  handleSaveProduct() vẫn gọi getProductById() 2 lần khi edit — một lần để lấy $oldImage, một lần trong renderProductForm(): Lưu $existing vào biến rồi truyền 
-xuống renderProductForm() thay vì để method đó tự query lại. Thêm param ?ProductEntity $product = null vào renderProductForm().
-* csrf_token không được truyền vào renderProductForm() khi render lại form sau lỗi — user submit form lỗi xong sẽ không có token mới để submit lần 2: Trong 
-renderProductForm() thêm 'csrf_token' => $this->generateCsrfToken() vào mảng data truyền vào view. Token phải được sinh lại mỗi lần render form.
-*/
