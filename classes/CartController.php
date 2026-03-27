@@ -6,12 +6,6 @@ require_once 'CartService.php';
 /**
  * Class CartController
  *
- * Lớp này dùng để xử lý request từ phía người dùng:
- * - Nhận dữ liệu (GET/POST)
- * - Kiểm tra dữ liệu hợp lệ
- * - Gọi CartService xử lý
- * - Trả về view hoặc JSON
- *
  */
 class CartController extends BaseController
 {
@@ -24,7 +18,11 @@ class CartController extends BaseController
     {
         parent::__construct();
 
-        // nếu không truyền từ ngoài vào thì tự tạo
+        /**
+         * Dependency Injection:
+         * - Có thể truyền CartService từ ngoài (test/unit test)
+         * - Nếu không có thì tự khởi tạo
+         */
         $this->cartService = $cartService ?? new CartService();
     }
 
@@ -33,15 +31,24 @@ class CartController extends BaseController
 
     /**
      * Lấy dữ liệu từ request
-     * Có trim để tránh lỗi nhập dư khoảng trắng
+     *
+     * Cách làm:
+     * - Ưu tiên POST → GET → default
+     * - trim string để tránh lỗi khoảng trắng
+     * - có thể mở rộng sanitize nếu cần
      */
     private function getInput(string $key, $default = null)
     {
         $value = $_POST[$key] ?? $_GET[$key] ?? $default;
 
-        // nếu là string thì trim
         if (is_string($value)) {
-            return trim($value);
+            $value = trim($value);
+
+            /**
+             * sanitize cơ bản chống XSS
+             * (áp dụng cho input dạng text như note, code giảm giá)
+             */
+            $value = htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
         }
 
         return $value;
@@ -51,8 +58,11 @@ class CartController extends BaseController
     // ================= RESPONSE =================
 
     /**
-     * Format JSON thống nhất
-     * Tránh mỗi chỗ trả 1 kiểu khác nhau
+     * Trả JSON thống nhất
+     *
+     * Ý tưởng:
+     * - Tất cả API trả cùng format
+     * - Dễ xử lý phía frontend
      */
     private function json(bool $success, string $message = '', array $data = []): void
     {
@@ -65,9 +75,10 @@ class CartController extends BaseController
 
 
     /**
-     * Tự xử lý response:
-     * - AJAX → trả JSON
-     * - Bình thường → redirect
+     * Xử lý response linh hoạt
+     *
+     * - Nếu AJAX → trả JSON
+     * - Nếu request thường → redirect
      */
     private function handle(bool $success, string $message = '', array $data = []): void
     {
@@ -76,7 +87,6 @@ class CartController extends BaseController
             return;
         }
 
-        // redirect về trang cart
         $this->redirect('/cart');
     }
 
@@ -109,23 +119,30 @@ class CartController extends BaseController
             $productId = (int) $this->getInput('product_id');
             $quantity  = (int) $this->getInput('quantity', 1);
 
-            // check dữ liệu
+            // validate input
             if ($productId <= 0 || $quantity <= 0) {
-                return $this->handle(false, 'Dữ liệu không hợp lệ');
+                $this->handle(false, 'Dữ liệu không hợp lệ');
+                return;
             }
 
-            // gọi service xử lý
             $result = $this->cartService->add($productId, $quantity);
 
-            return $this->handle(
+            $this->handle(
                 $result['success'],
                 $result['message'] ?? 'Thêm thành công',
                 $result['data'] ?? []
             );
+            return;
 
         } catch (Throwable $e) {
-            // tránh crash hệ thống
-            return $this->handle(false, $e->getMessage());
+            /**
+             * Không trả lỗi thô ra client
+             * → tránh lộ SQL / đường dẫn / hệ thống
+             */
+            error_log($e->getMessage());
+
+            $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
+            return;
         }
     }
 
@@ -139,24 +156,28 @@ class CartController extends BaseController
             $productId = (int) $this->getInput('product_id');
 
             if ($productId <= 0) {
-                return $this->handle(false, 'Product ID không hợp lệ');
+                $this->handle(false, 'Product ID không hợp lệ');
+                return;
             }
 
             $result = $this->cartService->remove($productId);
 
-            return $this->handle(
+            $this->handle(
                 $result['success'],
                 $result['message'] ?? 'Đã xoá'
             );
+            return;
 
         } catch (Throwable $e) {
-            return $this->handle(false, $e->getMessage());
+            error_log($e->getMessage());
+            $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
+            return;
         }
     }
 
 
     /**
-     * Cập nhật số lượng sản phẩm
+     * Cập nhật số lượng
      */
     public function update(): void
     {
@@ -165,23 +186,37 @@ class CartController extends BaseController
             $quantity  = (int) $this->getInput('quantity');
 
             if ($productId <= 0 || $quantity < 0) {
-                return $this->json(false, 'Dữ liệu không hợp lệ');
+                $this->json(false, 'Dữ liệu không hợp lệ');
+                return;
             }
 
-            // nếu số lượng = 0 thì coi như xoá
+            /**
+             * Không gọi lại method remove()
+             * → tránh phụ thuộc ngầm vào input
+             * → gọi trực tiếp Service
+             */
             if ($quantity === 0) {
-                return $this->remove();
+                $result = $this->cartService->remove($productId);
+
+                $this->json(
+                    $result['success'],
+                    $result['message'] ?? 'Đã xoá'
+                );
+                return;
             }
 
             $result = $this->cartService->update($productId, $quantity);
 
-            return $this->json(
+            $this->json(
                 $result['success'],
                 $result['message'] ?? 'Cập nhật thành công'
             );
+            return;
 
         } catch (Throwable $e) {
-            return $this->json(false, $e->getMessage());
+            error_log($e->getMessage());
+            $this->json(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
+            return;
         }
     }
 
@@ -194,10 +229,13 @@ class CartController extends BaseController
         try {
             $this->cartService->clear();
 
-            return $this->handle(true, 'Đã xoá toàn bộ giỏ hàng');
+            $this->handle(true, 'Đã xoá toàn bộ giỏ hàng');
+            return;
 
         } catch (Throwable $e) {
-            return $this->handle(false, $e->getMessage());
+            error_log($e->getMessage());
+            $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
+            return;
         }
     }
 
@@ -210,25 +248,15 @@ class CartController extends BaseController
         try {
             $total = $this->cartService->getTotal();
 
-            return $this->json(true, 'OK', [
+            $this->json(true, 'OK', [
                 'total' => $total
             ]);
+            return;
 
         } catch (Throwable $e) {
-            return $this->json(false, $e->getMessage());
+            error_log($e->getMessage());
+            $this->json(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
+            return;
         }
     }
 }
-
-/* Các vấn đề cần sửa:
-* Tất cả method có kiểu trả về void nhưng bên trong lại dùng return $this->handle(...) và return $this->json(...): handle() và json() đều trả void — return void
-trong PHP 8 không lỗi nhưng gây nhầm lẫn và một số static analyzer sẽ báo lỗi. Đổi thành return; sau mỗi lần gọi, hoặc bỏ return ở những chỗ là dòng cuối cùng.
-* update() gọi $this->remove() khi quantity = 0 — nhưng remove() lại đọc lại $_POST['product_id'] từ đầu: 
-Nếu product_id có trong request thì vẫn đúng. Nhưng nếu sau này remove() thay đổi cách lấy input thì update() bị ảnh hưởng ngầm. Nên gọi thẳng 
-$this->cartService->remove($productId) thay vì gọi method khác của Controller.
-* catch (Throwable $e) trả message lỗi thô ra client — lộ thông tin nội bộ: $e->getMessage() có thể chứa tên bảng, SQL, đường dẫn file. 
-Nên log nội bộ và trả message chung: error_log($e->getMessage()); $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
-* getInput() không sanitize — chỉ trim(), không qua ValidatorHelper::sanitizeInput(): Với product_id và quantity thì cast (int) đã đủ an toàn. 
-Nhưng nếu sau này thêm input dạng string (ghi chú, mã giảm giá) thì getInput() không sanitize XSS. Nên thêm sanitize hoặc dùng $this->post() / $this->get() 
-từ BaseController thay vì tự viết lại.
-*/
