@@ -101,3 +101,14 @@ class HomeController extends BaseController
         ]);
     }
 }
+
+/* Các vấn đề cần sửa:
+* require_once nằm trong Controller — Controller không nên biết đường dẫn file trên disk: Xóa dòng require_once, để autoloader lo. Nếu chưa có autoloader thì 
+đặt tất cả require_once vào một file bootstrap.php duy nhất rồi include ở index.php.
+* Thiếu return sau redirect() — code bên dưới vẫn chạy nếu ai đó override redirect() không có exit: Thêm return; ngay sau mọi lời gọi $this->redirect()
+*  Logic tìm $currentCategory bằng foreach nằm trong Controller — Controller đang làm việc của Service/Model: 
+Thêm getCategoryById(int $id) vào ProductService, gọi thẳng từ Controller. Bỏ được vòng foreach và giảm 1 query getAllCategories() không cần thiết khi chỉ cần 
+check tồn tại.
+* searchAndFilter('', $categoryId) — truyền keyword rỗng để lọc danh mục là dùng sai intent của method: Tạo method riêng getByCategory(int $categoryId) trong 
+ProductService. Tách biệt "lọc theo danh mục" và "tìm kiếm theo từ khóa" — sau này dễ thêm logic riêng mà không ảnh hưởng nhau.
+*/
