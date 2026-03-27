@@ -246,3 +246,16 @@ class ProductService
         return $this->categoryModel->getAll();
     }
 }
+
+/* Các vấn đề cần sửa:
+* getFeatured() gọi getById() trong vòng foreach — N query cho N category: Đã collect $categoryIds rồi nhưng vẫn query từng cái một trong loop. Nếu featured có 8
+sản phẩm thuộc 4 danh mục khác nhau thì 4 query riêng. Nên thêm CategoryModel::getByIds(array $ids) để 1 query lấy tất cả, giống pattern của getProductsWithCategory().
+* searchAndFilter() khi có cả keyword + category: tìm theo keyword trước rồi array_filter theo category trong PHP — không dùng DB để lọc kết hợp: Nếu search trả 
+500 sản phẩm nhưng chỉ 3 cái thuộc category đó thì load 500 row về PHP rồi bỏ 497. Nên thêm ProductModel::searchByCategory($keyword, $categoryId) với WHERE name 
+LIKE ? AND category_id = ? để DB lọc luôn.
+* getProductsWithCategory() load toàn bộ bảng categories dù chỉ cần một phần — không nhất quán với cách getFeatured() làm: Hai method cùng làm việc gắn category 
+nhưng theo 2 cách khác nhau. Nên thống nhất: hoặc cả 2 load all categories (đơn giản hơn), hoặc cả 2 chỉ load category cần thiết (hiệu quả hơn). Hiện tại không 
+nhất quán gây khó đọc.
+* Thiếu getByCategory() public method — HomeController hiện phải dùng searchAndFilter('', $categoryId) thay thế: Nên thêm method wrapper rõ ràng: public function 
+getByCategory(int $categoryId): array gọi $this->productModel->getByCategory($categoryId) rồi gắn category.
+*/
