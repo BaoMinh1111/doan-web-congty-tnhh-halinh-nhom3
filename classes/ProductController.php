@@ -79,43 +79,42 @@ class ProductController extends BaseController
 
     /**
      * Tìm kiếm sản phẩm — endpoint cho AJAX.
+     * Hỗ trợ lọc đồng thời theo từ khoá và/hoặc danh mục.
      *
-     * Tham số nhận từ query string (?q=rtx&category_id=2):
+     * Tham số nhận từ query string:
      *   q           → từ khoá tìm kiếm (string, mặc định '')
      *   category_id → lọc theo danh mục (int, mặc định 0 = không lọc)
      *
      * Luồng xử lý:
-     *   1. Nhận và validate tham số đầu vào.
-     *   2. Gọi ProductService::searchAndFilter().
-     *   3. Chuyển kết quả thành mảng thuần (có thể json_encode) rồi trả JSON.
+     *   1. Validate tham số đầu vào.
+     *   2. Gọi ProductService::searchAndFilter() — xử lý cả 3 trường hợp:
+     *      keyword only / category only / keyword + category.
+     *   3. Trả JSON kèm danh sách categories để FE dùng cho dropdown lọc.
      *
      * Response JSON thành công:
      *   {
-     *     "success": true,
-     *     "keyword": "rtx",
-     *     "category_id": 2,
-     *     "total": 3,
-     *     "data": [
-     *       {
-     *         "product": { "id": 1, "name": "RTX 4090", ... },
-     *         "category": { "id": 2, "name": "VGA", ... }
-     *       },
+     *     "success"     : true,
+     *     "keyword"     : "rtx",
+     *     "category_id" : 2,
+     *     "total"       : 3,
+     *     "data"        : [
+     *       { "product": {...}, "category": {...} },
+     *       ...
+     *     ],
+     *     "categories"  : [
+     *       { "id": 1, "name": "CPU", ... },
      *       ...
      *     ]
      *   }
      *
-     * Response JSON khi không có kết quả:
-     *   { "success": true, "keyword": "xyz", "category_id": 0, "total": 0, "data": [] }
-     *
-     * Response JSON khi lỗi:
-     *   { "success": false, "message": "Từ khoá hoặc danh mục không được để trống." }
+     * Response JSON lỗi:
+     *   { "success": false, "message": "..." }
      *
      * Cách dùng trong router:
-     *   $controller->search();   // chỉ chấp nhận GET request
+     *   $controller->search();   // chỉ chấp nhận GET
      */
     public function search(): void
     {
-        // Chỉ chấp nhận GET
         if (!$this->isGet()) {
             $this->jsonResponse([
                 'success' => false,
@@ -123,11 +122,9 @@ class ProductController extends BaseController
             ], 405);
         }
 
-        // Lấy tham số từ BaseController::get() — tự động cast đúng kiểu
         $keyword    = trim($this->get('q', ''));
         $categoryId = $this->get('category_id', 0);
 
-        // Guard: cả 2 đều trống → báo lỗi thay vì trả kết quả rỗng gây nhầm lẫn
         if ($keyword === '' && $categoryId <= 0) {
             $this->jsonResponse([
                 'success' => false,
@@ -135,7 +132,6 @@ class ProductController extends BaseController
             ], 400);
         }
 
-        // Giới hạn độ dài keyword để tránh abuse
         if (mb_strlen($keyword) > 100) {
             $this->jsonResponse([
                 'success' => false,
@@ -144,9 +140,12 @@ class ProductController extends BaseController
         }
 
         try {
-            $results = $this->productService->searchAndFilter($keyword, $categoryId);
+            $results    = $this->productService->searchAndFilter($keyword, $categoryId);
+            // Kèm danh sách categories → FE dùng để render dropdown lọc
+            // mà không cần gọi thêm một request riêng
+            $categories = $this->productService->getAllCategories();
+
         } catch (Throwable $e) {
-            // Không lộ chi tiết lỗi ra ngoài — log nội bộ, trả thông báo chung
             error_log('[ProductController::search] ' . $e->getMessage());
             $this->jsonResponse([
                 'success' => false,
@@ -154,14 +153,10 @@ class ProductController extends BaseController
             ], 500);
         }
 
-        // Chuyển Entity thành mảng thuần để json_encode được
-        // ProductEntity và CategoryEntity đều có toArray()
-        $data = array_map(function (array $item) {
-            return [
-                'product'  => $item['product']->toArray(),
-                'category' => $item['category']?->toArray(),
-            ];
-        }, $results);
+        $data = array_map(fn(array $item) => [
+            'product'  => $item['product']->toArray(),
+            'category' => $item['category']?->toArray(),
+        ], $results);
 
         $this->jsonResponse([
             'success'     => true,
@@ -169,17 +164,11 @@ class ProductController extends BaseController
             'category_id' => $categoryId,
             'total'       => count($data),
             'data'        => $data,
+            // Trả về tất cả categories để FE render dropdown lọc không cần request thêm
+            'categories'  => array_map(
+                fn($cat) => $cat->toArray(),
+                $categories
+            ),
         ]);
     }
 }
-
-/* Các vấn đề cần sửa:
-* detail() và search() gọi $this->redirect() và $this->jsonResponse() rồi code vẫn tiếp tục chạy — không có return: 
-Cả hai method đều gọi exit bên trong nên không crash thực tế. Nên thêm return; sau mỗi lần gọi để ý định rõ ràng và tránh lỗi nếu sau này bỏ exit.
-* search() sau catch không có return — code tiếp tục chạy xuống array_map với $results chưa được gán: jsonResponse() trong catch gọi exit nên không crash. 
-Nhưng nếu ai đó bỏ exit trong jsonResponse() thì $results undefined → Fatal Error. Thêm return; sau jsonResponse() trong catch block.
-* Guard $keyword === '' && $categoryId <= 0 — nếu cả 2 trống mới báo lỗi, nhưng nếu chỉ có $categoryId = -1 thì vẫn qua: $categoryId = -1 qua guard, xuống Service 
-rồi sinh SQL WHERE category_id = -1 — trả mảng rỗng không có lỗi. Không crash nhưng hành xử kỳ lạ. Nên thêm: if ($categoryId < 0) $categoryId = 0; trước guard.
-* detail() redirect về /?error=product_not_found nhưng không có cơ chế hiển thị flash message: Trang chủ cần đọc $_GET['error'] và hiển thị thông báo — nếu 
-HomeController không xử lý param này thì redirect xong người dùng không thấy gì. Nên dùng session flash message thay vì query string.
-*/
