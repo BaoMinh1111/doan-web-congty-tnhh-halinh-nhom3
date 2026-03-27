@@ -198,3 +198,14 @@ class PromotionModel extends BaseModel
         return $results;
     }
 }
+
+/* Các vấn đề cần sửa:
+* getById() gọi $this->find() — BaseModel không có method find(), chỉ có getById(): Gọi method không tồn tại
+* increaseUsedCount() mở transaction riêng — nhưng applyCode() đã gọi nó bên trong transaction của chính nó: Nested transaction trong MySQL thực ra không 
+tồn tại — BEGIN lồng nhau sẽ tự động COMMIT transaction cha. BaseModel có check inTransaction() và throw RuntimeException → applyCode() sẽ crash khi 
+gọi increaseUsedCount(). Cần tách logic tăng count ra method private không dùng transaction.
+* increaseUsedCount() có race condition — đọc rồi cộng rồi ghi, 2 request đồng thời có thể cộng sai: Thay vì đọc used_count rồi +1 trong PHP, nên dùng 
+SQL atomic: UPDATE promotions SET used_count = used_count + ? WHERE id = ?. Không cần đọc Entity trước, không có khoảng hở giữa đọc và ghi.
+* isActive(), isExpired(), hasReachedUsageLimit() mỗi cái query DB 1 lần — gọi cả 3 tốn 3 query cho cùng 1 promotion: Nếu cần check cả 3, nên lấy Entity 1 lần 
+rồi gọi method trên Entity. 3 helper method này không cần thiết nếu đã có Entity — bỏ đi hoặc gộp thành getStatus(int $id): array.
+*/
