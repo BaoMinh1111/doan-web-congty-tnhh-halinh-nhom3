@@ -172,3 +172,14 @@ class ProductController extends BaseController
         ]);
     }
 }
+
+/* Các vấn đề cần sửa:
+* detail() và search() gọi $this->redirect() và $this->jsonResponse() rồi code vẫn tiếp tục chạy — không có return: 
+Cả hai method đều gọi exit bên trong nên không crash thực tế. Nên thêm return; sau mỗi lần gọi để ý định rõ ràng và tránh lỗi nếu sau này bỏ exit.
+* search() sau catch không có return — code tiếp tục chạy xuống array_map với $results chưa được gán: jsonResponse() trong catch gọi exit nên không crash. 
+Nhưng nếu ai đó bỏ exit trong jsonResponse() thì $results undefined → Fatal Error. Thêm return; sau jsonResponse() trong catch block.
+* Guard $keyword === '' && $categoryId <= 0 — nếu cả 2 trống mới báo lỗi, nhưng nếu chỉ có $categoryId = -1 thì vẫn qua: $categoryId = -1 qua guard, xuống Service 
+rồi sinh SQL WHERE category_id = -1 — trả mảng rỗng không có lỗi. Không crash nhưng hành xử kỳ lạ. Nên thêm: if ($categoryId < 0) $categoryId = 0; trước guard.
+* detail() redirect về /?error=product_not_found nhưng không có cơ chế hiển thị flash message: Trang chủ cần đọc $_GET['error'] và hiển thị thông báo — nếu 
+HomeController không xử lý param này thì redirect xong người dùng không thấy gì. Nên dùng session flash message thay vì query string.
+*/
