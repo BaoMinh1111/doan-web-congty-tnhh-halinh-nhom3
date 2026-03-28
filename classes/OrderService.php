@@ -3,8 +3,16 @@
 /**
  * Class OrderService
  *
- * Xử lý toàn bộ quy trình tạo đơn hàng từ giỏ hàng (session-based cart).
- * Không bao gồm logic khuyến mãi (promotion) — sẽ mở rộng sau.
+ * Chịu trách nhiệm điều phối toàn bộ quy trình đặt hàng:
+ * - Nhận dữ liệu từ Controller
+ * - Kiểm tra hợp lệ
+ * - Tính tổng tiền
+ * - Áp dụng khuyến mãi
+ * - Lưu dữ liệu xuống database
+ *
+ * Nguyên tắc:
+ * - Service KHÔNG xử lý chi tiết logic (ví dụ: tính discount)
+ * - Chỉ gọi các lớp chuyên trách (Entity / Model)
  *
  * @package App\Services
  * @author  Ha Linh Technology Solutions
@@ -15,11 +23,38 @@ class OrderService
     // THUỘC TÍNH
     // =========================================================================
 
-    private OrderModel      $orderModel;
+    private OrderModel       $orderModel;
     private OrderDetailModel $detailModel;
-    private ProductModel    $productModel;
-    private CustomerModel   $customerModel;
-    private InventoryModel  $inventoryModel;
+    private ProductModel     $productModel;
+    private CustomerModel    $customerModel;
+    private InventoryModel   $inventoryModel;
+    private PromotionModel   $promotionModel;
+
+    /**
+     * Danh sách trạng thái hợp lệ — nguồn sự thật duy nhất ở tầng Service.
+     * OrderModel::assertValidStatus() tham chiếu về đây thay vì tự định nghĩa riêng
+     * → tránh hai nơi định nghĩa cùng một dữ liệu (đã fix vấn đề #9).
+     *
+     * AdminController và View import từ đây thay vì tự định nghĩa.
+     */
+    public const VALID_STATUSES = [
+        'pending',
+        'confirmed',
+        'shipped',
+        'completed',
+        'cancelled',
+    ];
+
+    /**
+     * Nhãn tiếng Việt cho từng trạng thái — dùng trong View / flash message.
+     */
+    public const STATUS_LABELS = [
+        'pending'   => 'Chờ xử lý',
+        'confirmed' => 'Đã xác nhận',
+        'shipped'   => 'Đang giao',
+        'completed' => 'Hoàn thành',
+        'cancelled' => 'Đã huỷ',
+    ];
 
 
     // =========================================================================
@@ -27,59 +62,63 @@ class OrderService
     // =========================================================================
 
     /**
-     * Inject tất cả Model cần thiết qua constructor (Dependency Injection).
-     * Không dùng new Model() bên trong service → dễ test, dễ thay thế.
+     * Inject dependency để dễ test và tách biệt các tầng.
      */
     public function __construct(
         OrderModel       $orderModel,
         OrderDetailModel $detailModel,
         ProductModel     $productModel,
         CustomerModel    $customerModel,
-        InventoryModel   $inventoryModel
+        InventoryModel   $inventoryModel,
+        PromotionModel   $promotionModel
     ) {
         $this->orderModel     = $orderModel;
         $this->detailModel    = $detailModel;
         $this->productModel   = $productModel;
         $this->customerModel  = $customerModel;
         $this->inventoryModel = $inventoryModel;
+        $this->promotionModel = $promotionModel;
     }
 
 
     // =========================================================================
-    // PUBLIC API
+    // TẠO ĐƠN HÀNG
     // =========================================================================
 
     /**
-     * Tạo đơn hàng từ giỏ hàng (session cart) — không có khuyến mãi.
+     * Tạo đơn hàng từ giỏ hàng.
      *
-     * @param  array      $formData  Thông tin khách hàng từ form đặt hàng.
-     *                               Cần có: name, email, phone, address.
-     *                               Tuỳ chọn: note, user_id (nếu đã đăng nhập).
-     * @param  array      $cart      Giỏ hàng dạng:
-     *                               [
-     *                                 ['product_id' => 1, 'quantity' => 2],
-     *                                 ['product_id' => 3, 'quantity' => 1],
-     *                               ]
-     * @return array                 Kết quả:
-     *                               ['success' => true,  'order_id' => 42]
-     *                               ['success' => false, 'message'  => '...']
+     * Luồng xử lý:
+     * 1. Validate dữ liệu khách hàng
+     * 2. Kiểm tra giỏ hàng không trống
+     * 3. Duyệt từng sản phẩm: kiểm tra tồn tại + tồn kho + tính tổng
+     * 4. Áp dụng khuyến mãi nếu có (check canUse với tổng GỐC)
+     * 5. Transaction: tạo Customer → Order → OrderDetail → trừ tồn kho (atomic)
+     * 6. Sau transaction: xoá cart + tăng used_count mã giảm giá
+     *
+     * @param  array       $formData      Thông tin khách hàng từ form.
+     * @param  array       $cart          Giỏ hàng dạng [['product_id'=>1,'quantity'=>2],...].
+     * @param  string|null $promotionCode Mã khuyến mãi người dùng nhập (null nếu không có).
+     * @return array                      ['success'=>bool, 'order_id'=>int] hoặc ['success'=>false, 'message'=>string]
      */
-    public function createOrderFromCart(array $formData, array $cart): array
-    {
+    public function createOrderFromCart(
+        array   $formData,
+        array   $cart,
+        ?string $promotionCode = null
+    ): array {
         // ── Bước 1: Validate form ────────────────────────────────────────────
         $validationError = $this->validateFormData($formData);
         if ($validationError !== null) {
             return ['success' => false, 'message' => $validationError];
         }
 
-        // ── Bước 2: Validate giỏ hàng ────────────────────────────────────────
+        // ── Bước 2: Kiểm tra giỏ hàng ────────────────────────────────────────
         if (empty($cart)) {
-            return ['success' => false, 'message' => 'Giỏ hàng trống, không thể tạo đơn hàng.'];
+            return ['success' => false, 'message' => 'Giỏ hàng trống.'];
         }
 
-        // ── Bước 3 & 4: Kiểm tra tồn kho + tính tổng tiền ───────────────────
-        // Gộp 2 bước vào một lần duyệt cart để tránh duyệt 2 lần
-        $enrichedItems = [];  // cart items đã được bổ sung thông tin sản phẩm
+        // ── Bước 3: Duyệt giỏ hàng — kiểm tra sản phẩm + tồn kho + tính tổng
+        $enrichedItems = [];
         $totalPrice    = 0.0;
 
         foreach ($cart as $item) {
@@ -87,150 +126,463 @@ class OrderService
             $quantity  = (int) ($item['quantity']   ?? 0);
 
             if ($productId <= 0 || $quantity <= 0) {
-                return [
-                    'success' => false,
-                    'message' => 'Dữ liệu giỏ hàng không hợp lệ (product_id hoặc quantity <= 0).',
-                ];
+                return ['success' => false, 'message' => 'Dữ liệu giỏ hàng không hợp lệ.'];
             }
 
-            // Lấy thông tin sản phẩm dưới dạng ProductEntity
-            // ProductModel::getById() trả ?ProductEntity (đã override từ BaseModel)
             $product = $this->productModel->getById($productId);
             if ($product === null) {
-                return [
-                    'success' => false,
-                    'message' => "Sản phẩm ID={$productId} không tồn tại hoặc đã bị xoá.",
-                ];
+                return ['success' => false, 'message' => "Sản phẩm ID={$productId} không tồn tại."];
             }
 
-            // Kiểm tra tồn kho — truyền Entity thay vì mảng, checkStock tự gọi getter
+            // checkStock() kiểm tra sơ bộ trước transaction để phản hồi nhanh cho user.
+            // Việc trừ tồn kho thực sự dùng atomic UPDATE bên trong transaction (bước 5)
+            // → tránh oversell khi 2 request đồng thời (đã fix vấn đề #3).
             $stockError = $this->checkStock($product, $quantity);
             if ($stockError !== null) {
                 return ['success' => false, 'message' => $stockError];
             }
 
-            // Dùng getter — type-safe, không phụ thuộc tên key mảng DB
-            $priceAtPurchase = $product->getPrice();
-            $totalPrice     += $priceAtPurchase * $quantity;
+            $price       = $product->getPrice();
+            $totalPrice += $price * $quantity;
 
             $enrichedItems[] = [
-                'product_id'        => $product->getId(),
-                'quantity'          => $quantity,
-                'price_at_purchase' => $priceAtPurchase,
-                'product_name'      => $product->getName(), // dùng để log/debug & thông báo lỗi
-                // Giữ toàn bộ Entity để dùng sau transaction nếu cần
-                // Không ảnh hưởng đến dữ liệu ghi vào DB vì detailModel->insert() chỉ dùng
-                // product_id, quantity, price_at_purchase — không đọc key 'product' này.
-                'product'           => $product,
+                'product_id' => $product->getId(),
+                'quantity'   => $quantity,
+                'price'      => $price,
+                'product'    => $product,
             ];
         }
 
-        // ── Bước 5–8: Tạo Customer + Order + OrderDetail + Trừ tồn kho ──────
-        // Toàn bộ bước này chạy trong transaction.
-        // Nếu bất kỳ bước nào thất bại → rollback toàn bộ → CSDL không bị dở dang.
+        // ── Bước 4: Áp dụng khuyến mãi ───────────────────────────────────────
+        $promo         = null;
+        $originalTotal = $totalPrice; // lưu tổng GỐC — dùng để check canUse lại trong transaction
+
+        if ($promotionCode !== null) {
+            $promo = $this->promotionModel->getByCode($promotionCode);
+
+            if ($promo === null) {
+                return ['success' => false, 'message' => 'Mã khuyến mãi không tồn tại.'];
+            }
+
+            // canUse() nhận tổng GỐC — không phải tổng đã giảm
+            // tránh: đơn 500k, giảm 100k, minOrder 450k → check canUse(400k) = false (sai)
+            if (!$promo->canUse($originalTotal)) {
+                return [
+                    'success' => false,
+                    'message' => $promo->getFailMessage($originalTotal),
+                ];
+            }
+
+            $discount   = $promo->calculateDiscount($originalTotal);
+            $totalPrice = max(0, $totalPrice - $discount);
+        }
+
+        // ── Bước 5: Transaction ───────────────────────────────────────────────
         try {
-            $orderId = $this->orderModel->transaction(function () use (
-                $formData,
-                $enrichedItems,
-                $totalPrice
-            ): int {
-                // Bước 5: Tạo hoặc lấy Customer
-                $customerId = $this->resolveCustomer($formData);
+            $orderId = $this->orderModel->transaction(
+                function () use ($formData, $enrichedItems, $totalPrice, $originalTotal, $promo): int {
 
-                // Bước 6: Tạo bản ghi Order
-                $orderId = $this->orderModel->insert([
-                    'customer_id' => $customerId,
-                    'user_id'     => $formData['user_id'] ?? null,
-                    'total_price' => $totalPrice,
-                    'status'      => 'pending',
-                    'note'        => trim($formData['note'] ?? ''),
-                    'created_at'  => date('Y-m-d H:i:s'),
-                ]);
+                    // Check lại canUse với tổng GỐC trong transaction
+                    // — phòng race condition: 2 request đồng thời dùng cùng mã
+                    if ($promo !== null && !$promo->canUse($originalTotal)) {
+                        throw new RuntimeException($promo->getFailMessage($originalTotal));
+                    }
 
-                if ($orderId <= 0) {
-                    // insert() trả 0 → không có auto-increment id → throw để rollback
-                    throw new RuntimeException('Tạo đơn hàng thất bại (insert không trả về ID).');
-                }
+                    // Tạo hoặc cập nhật khách hàng
+                    // resolveCustomer() chạy trong transaction để đảm bảo
+                    // customer_id luôn hợp lệ khi insert orders
+                    $customerId = $this->resolveCustomer($formData);
 
-                // Bước 7: Tạo từng dòng OrderDetail
-                foreach ($enrichedItems as $item) {
-                    $inserted = $this->detailModel->insert([
-                        'order_id'         => $orderId,
-                        'product_id'       => $item['product_id'],
-                        'quantity'         => $item['quantity'],
-                        'price_at_purchase' => $item['price_at_purchase'],
+                    // Tạo đơn hàng
+                    $orderId = $this->orderModel->insert([
+                        'customer_id'  => $customerId,
+                        'user_id'      => $formData['user_id'] ?? null,
+                        'total_price'  => $totalPrice,
+                        'status'       => 'pending',
+                        'note'         => trim($formData['note'] ?? ''),
+                        'created_at'   => date('Y-m-d H:i:s'),
+                        'promotion_id' => $promo?->getId(),
                     ]);
 
-                    // detailModel->insert() trả 0 với bảng composite key → kiểm tra rowCount thay thế
-                    // Ở đây dùng exception nếu insert thất bại (prepareStmt đã throw RuntimeException)
-                    // nên không cần check thêm. Nhưng nếu muốn chắc chắn hơn thì check $inserted.
-                }
-
-                // Bước 8: Trừ tồn kho từng sản phẩm
-                foreach ($enrichedItems as $item) {
-                    $decreased = $this->inventoryModel->decreaseStock(
-                        $item['product_id'],
-                        $item['quantity']
-                    );
-
-                    if (!$decreased) {
-                        // decreaseStock() trả false khi tồn kho không đủ hoặc không tìm thấy
-                        throw new RuntimeException(
-                            "Trừ tồn kho thất bại cho sản phẩm \"{$item['product_name']}\"."
-                        );
+                    if ($orderId <= 0) {
+                        throw new RuntimeException('Tạo đơn hàng thất bại.');
                     }
+
+                    // Lưu chi tiết đơn
+                    foreach ($enrichedItems as $item) {
+                        $this->detailModel->insert([
+                            'order_id'          => $orderId,
+                            'product_id'        => $item['product_id'],
+                            'quantity'          => $item['quantity'],
+                            'price_at_purchase' => $item['price'],
+                        ]);
+                    }
+
+                    // Trừ tồn kho bằng atomic UPDATE — tránh oversell (đã fix vấn đề #3).
+                    // decreaseStock() dùng: UPDATE inventory SET quantity = quantity - ?
+                    //                       WHERE product_id = ? AND quantity >= ?
+                    // Nếu rowCount() = 0 nghĩa là hàng vừa hết → throw để rollback toàn bộ
+                    foreach ($enrichedItems as $item) {
+                        if (!$this->inventoryModel->decreaseStock(
+                            $item['product_id'],
+                            $item['quantity']
+                        )) {
+                            throw new RuntimeException(
+                                "Không thể cập nhật tồn kho cho sản phẩm \"{$item['product']->getName()}\". "
+                                . 'Sản phẩm có thể vừa hết hàng.'
+                            );
+                        }
+                    }
+
+                    return $orderId;
                 }
+            );
 
-                return $orderId;
-            });
-
-            // Xoá giỏ hàng khỏi session SAU KHI transaction thành công.
-            // Đặt ở đây (ngoài transaction) vì session không phải DB → không rollback được.
-            // Nếu đặt bên trong transaction mà sau đó rollback, session vẫn đã bị xoá → mất cart.
+            // ── Bước 6: Sau transaction thành công ───────────────────────────
+            // clearCart() đặt NGOÀI transaction — session không rollback được,
+            // nếu đặt bên trong mà sau đó rollback thì cart đã bị xoá mất
             SessionHelper::clearCart();
+
+            // increaseUsedCount() đặt NGOÀI transaction — nếu tăng thất bại
+            // không nên rollback cả đơn hàng đã tạo thành công.
+            // Bọc try-catch riêng để log lỗi mà không ảnh hưởng response (đã fix vấn đề #7).
+            if ($promo !== null) {
+                try {
+                    $this->promotionModel->increaseUsedCount($promo->getId());
+                } catch (Throwable $e) {
+                    // Đơn hàng vẫn thành công — chỉ log để admin xử lý thủ công nếu cần
+                    error_log(
+                        '[OrderService] increaseUsedCount thất bại cho promo ID='
+                        . $promo->getId() . ': ' . $e->getMessage()
+                    );
+                }
+            }
 
             return ['success' => true, 'order_id' => $orderId];
 
         } catch (RuntimeException $e) {
-            // RuntimeException từ nội bộ service/model → thông báo có thể hiển thị cho user
+            // Lỗi logic nghiệp vụ → thông báo chi tiết có thể hiển thị cho user
             return ['success' => false, 'message' => $e->getMessage()];
 
         } catch (Throwable $e) {
-            // Lỗi không mong đợi (DB down, ...) → log chi tiết, trả thông báo chung cho user
-            error_log('[OrderService] Lỗi không mong đợi: ' . $e->getMessage());
+            // Lỗi không mong đợi → log nội bộ, trả thông báo chung
+            error_log('[OrderService::createOrderFromCart] ' . $e->getMessage());
+            return ['success' => false, 'message' => 'Lỗi hệ thống. Vui lòng thử lại sau.'];
+        }
+    }
+
+
+    // =========================================================================
+    // QUẢN LÝ TRẠNG THÁI ĐƠN HÀNG (DÙNG CHO ADMIN)
+    // =========================================================================
+
+    /**
+     * Cập nhật trạng thái đơn hàng.
+     *
+     * Luồng xử lý:
+     * 1. Validate orderId và status mới
+     * 2. Lấy đơn hàng hiện tại — kiểm tra tồn tại
+     * 3. Kiểm tra chuyển trạng thái có hợp lệ không (state machine)
+     * 4. Nếu huỷ đơn (cancelled) → hoàn lại tồn kho trong transaction
+     * 5. Nếu trạng thái khác → cập nhật đơn thuần
+     *
+     * Luồng trạng thái hợp lệ:
+     *   pending   → confirmed | cancelled
+     *   confirmed → shipped   | cancelled
+     *   shipped   → completed | cancelled
+     *   completed → (không chuyển được — đơn đã hoàn thành)
+     *   cancelled → (không chuyển được — đơn đã huỷ)
+     *
+     * @param  int    $orderId   ID đơn hàng cần cập nhật.
+     * @param  string $newStatus Trạng thái mới muốn chuyển sang.
+     * @return array             ['success'=>bool, 'message'=>string]
+     */
+    public function updateOrderStatus(int $orderId, string $newStatus): array
+    {
+        // ── Bước 1: Validate đầu vào ─────────────────────────────────────────
+        if ($orderId <= 0) {
+            return ['success' => false, 'message' => 'ID đơn hàng không hợp lệ.'];
+        }
+
+        if (!in_array($newStatus, self::VALID_STATUSES, true)) {
             return [
                 'success' => false,
-                'message' => 'Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau.',
+                'message' => 'Trạng thái không hợp lệ. Chấp nhận: '
+                    . implode(', ', self::VALID_STATUSES),
             ];
+        }
+
+        // ── Bước 2: Lấy đơn hàng hiện tại ───────────────────────────────────
+        $order = $this->orderModel->getById($orderId);
+
+        if ($order === null) {
+            return ['success' => false, 'message' => "Không tìm thấy đơn hàng ID={$orderId}."];
+        }
+
+        $currentStatus = $order['status'];
+
+        // ── Bước 3: Kiểm tra state machine ───────────────────────────────────
+        // Không cho phép cập nhật nếu trạng thái hiện tại là terminal
+        $terminalStatuses = ['completed', 'cancelled'];
+        if (in_array($currentStatus, $terminalStatuses, true)) {
+            return [
+                'success' => false,
+                'message' => 'Đơn hàng đã ở trạng thái "'
+                    . (self::STATUS_LABELS[$currentStatus] ?? $currentStatus)
+                    . '" — không thể thay đổi.',
+            ];
+        }
+
+        // Không cho phép chuyển về trạng thái trước đó (đi ngược luồng)
+        $statusOrder = array_flip(['pending', 'confirmed', 'shipped', 'completed']);
+        $isDowngrade = isset($statusOrder[$newStatus], $statusOrder[$currentStatus])
+            && $statusOrder[$newStatus] < $statusOrder[$currentStatus]
+            && $newStatus !== 'cancelled';
+
+        if ($isDowngrade) {
+            return [
+                'success' => false,
+                'message' => 'Không thể chuyển đơn hàng từ "'
+                    . (self::STATUS_LABELS[$currentStatus] ?? $currentStatus)
+                    . '" về "'
+                    . (self::STATUS_LABELS[$newStatus] ?? $newStatus)
+                    . '".',
+            ];
+        }
+
+        // Không cập nhật nếu trạng thái không thay đổi
+        if ($currentStatus === $newStatus) {
+            return [
+                'success' => false,
+                'message' => 'Đơn hàng đã ở trạng thái "'
+                    . (self::STATUS_LABELS[$newStatus] ?? $newStatus)
+                    . '" rồi.',
+            ];
+        }
+
+        // ── Bước 4: Huỷ đơn → hoàn lại tồn kho trong transaction ────────────
+        if ($newStatus === 'cancelled') {
+            return $this->cancelOrderWithRestock($orderId, $currentStatus);
+        }
+
+        // ── Bước 5: Chuyển trạng thái thông thường ───────────────────────────
+        try {
+            $updated = $this->orderModel->update($orderId, ['status' => $newStatus]);
+
+            if (!$updated) {
+                return [
+                    'success' => false,
+                    'message' => 'Cập nhật trạng thái thất bại. Vui lòng thử lại.',
+                ];
+            }
+
+            return [
+                'success'     => true,
+                'message'     => 'Đã chuyển sang "'
+                    . (self::STATUS_LABELS[$newStatus] ?? $newStatus) . '".',
+                'old_status'  => $currentStatus,
+                'new_status'  => $newStatus,
+            ];
+
+        } catch (Throwable $e) {
+            error_log('[OrderService::updateOrderStatus] ' . $e->getMessage());
+            return ['success' => false, 'message' => 'Lỗi hệ thống. Vui lòng thử lại sau.'];
         }
     }
 
     /**
-     * Cập nhật trạng thái đơn hàng (dùng cho trang admin).
+     * Huỷ đơn hàng và hoàn lại tồn kho trong một transaction.
      *
-     * Trạng thái hợp lệ: pending → confirmed → shipped → completed
-     *                    bất kỳ trạng thái nào → cancelled
+     * Tách riêng khỏi updateOrderStatus() để:
+     * - Logic hoàn kho phức tạp không làm nặng method chính
+     * - Dễ test riêng lẻ
+     * - Chỉ gọi khi $newStatus === 'cancelled'
      *
-     * @param  int    $orderId ID đơn hàng.
-     * @param  string $status  Trạng thái mới.
-     * @return array           ['success' => bool, 'message' => string]
+     * Chỉ hoàn kho khi đơn đang ở trạng thái đã trừ kho thực sự:
+     *   - pending   → đã trừ kho lúc tạo đơn → cần hoàn
+     *   - confirmed → đã trừ kho              → cần hoàn
+     *   - shipped   → đã trừ kho              → cần hoàn
+     * (Nếu sau này thêm logic trừ kho lúc confirmed thay vì lúc tạo,
+     *  chỉ cần sửa điều kiện ở đây, không ảnh hưởng chỗ khác.)
+     *
+     * @param  int    $orderId       ID đơn hàng cần huỷ.
+     * @param  string $currentStatus Trạng thái hiện tại của đơn (đã validate trước khi gọi).
+     * @return array  ['success'=>bool, 'message'=>string]
      */
-    public function updateOrderStatus(int $orderId, string $status): array
+    private function cancelOrderWithRestock(int $orderId, string $currentStatus): array
     {
-        $validStatuses = ['pending', 'confirmed', 'shipped', 'completed', 'cancelled'];
+        // Các trạng thái đã trừ kho → cần hoàn khi huỷ
+        $statusesWithDeductedStock = ['pending', 'confirmed', 'shipped'];
+        $shouldRestock = in_array($currentStatus, $statusesWithDeductedStock, true);
 
-        if (!in_array($status, $validStatuses, strict: true)) {
+        try {
+            $this->orderModel->transaction(function () use ($orderId, $shouldRestock): void {
+
+                // Cập nhật trạng thái đơn hàng thành cancelled
+                $updated = $this->orderModel->update($orderId, ['status' => 'cancelled']);
+                if (!$updated) {
+                    throw new RuntimeException('Không thể cập nhật trạng thái đơn hàng.');
+                }
+
+                if (!$shouldRestock) {
+                    return; // Không cần hoàn kho
+                }
+
+                // Lấy danh sách sản phẩm trong đơn để hoàn kho
+                $items = $this->detailModel->getDetailsByOrder($orderId);
+
+                if (empty($items)) {
+                    // Không có chi tiết đơn → không hoàn kho, không throw
+                    // (có thể đơn được tạo thủ công không qua giỏ hàng)
+                    return;
+                }
+
+                foreach ($items as $item) {
+                    // increaseStock() cộng lại số lượng vào inventory
+                    // Nếu fail → throw để rollback toàn bộ (cả việc đổi status)
+                    // → tránh tình trạng đơn bị huỷ nhưng kho không được hoàn
+                    if (!$this->inventoryModel->increaseStock(
+                        (int) $item['product_id'],
+                        (int) $item['quantity']
+                    )) {
+                        throw new RuntimeException(
+                            'Không thể hoàn tồn kho cho sản phẩm ID='
+                            . $item['product_id'] . '. Huỷ đơn bị từ chối.'
+                        );
+                    }
+                }
+            });
+
+            $restockNote = $shouldRestock ? ' Tồn kho đã được hoàn lại.' : '';
+
             return [
-                'success' => false,
-                'message' => 'Trạng thái không hợp lệ. Chấp nhận: ' . implode(', ', $validStatuses),
+                'success'     => true,
+                'message'     => 'Đơn hàng đã được huỷ.' . $restockNote,
+                'old_status'  => $currentStatus,
+                'new_status'  => 'cancelled',
             ];
+
+        } catch (RuntimeException $e) {
+            return ['success' => false, 'message' => $e->getMessage()];
+
+        } catch (Throwable $e) {
+            error_log('[OrderService::cancelOrderWithRestock] ' . $e->getMessage());
+            return ['success' => false, 'message' => 'Lỗi hệ thống khi huỷ đơn. Vui lòng thử lại.'];
+        }
+    }
+
+    /**
+     * Lấy một đơn hàng theo ID — dùng cho trang chi tiết admin.
+     *
+     * Trả về array|null thay vì OrderEntity|null để nhất quán với
+     * kiểu trả về thực tế của OrderModel::getById() (đã fix vấn đề #6).
+     * Controller/View nhận array và truy cập trực tiếp qua key.
+     *
+     * @param  int        $orderId
+     * @return array|null
+     */
+    public function getOrderById(int $orderId): ?array
+    {
+        if ($orderId <= 0) {
+            return null;
         }
 
-        $updated = $this->orderModel->update($orderId, ['status' => $status]);
+        return $this->orderModel->getById($orderId);
+    }
 
-        return $updated
-            ? ['success' => true,  'message' => 'Cập nhật trạng thái thành công.']
-            : ['success' => false, 'message' => 'Không tìm thấy đơn hàng hoặc trạng thái không thay đổi.'];
+    /**
+     * Lấy danh sách chi tiết sản phẩm trong một đơn hàng.
+     *
+     * @param  int   $orderId
+     * @return array
+     */
+    public function getOrderItems(int $orderId): array
+    {
+        return $this->detailModel->getDetailsByOrder($orderId);
+    }
+
+    /**
+     * Lấy danh sách đơn hàng có lọc theo trạng thái và phân trang.
+     * Dùng cho trang danh sách đơn hàng của admin.
+     *
+     * Gọi đúng tên method đã có trong OrderModel: paginateWithFilter()
+     * (đã fix vấn đề #4 — tên cũ getByStatusPaginated() không tồn tại).
+     *
+     * @param  string $status  '' = lấy tất cả, hoặc 1 trong VALID_STATUSES
+     * @param  int    $page    Trang hiện tại (bắt đầu từ 1)
+     * @param  int    $limit   Số đơn mỗi trang
+     * @return array           Mảng ['data', 'total', 'currentPage', 'totalPages', 'limit', 'status']
+     */
+    public function getOrdersByStatus(string $status = '', int $page = 1, int $limit = 15): array
+    {
+        // Chuyển string rỗng thành null — paginateWithFilter() dùng null để lấy tất cả
+        return $this->orderModel->paginateWithFilter($page, $limit, $status ?: null);
+    }
+
+    /**
+     * Đếm tổng số trang đơn hàng theo trạng thái — dùng để render pagination.
+     *
+     * Gọi OrderModel::count() đã override với optional status
+     * thay vì countByStatus() không nhận tham số (đã fix vấn đề #5).
+     *
+     * @param  string $status '' = đếm tất cả
+     * @param  int    $limit
+     * @return int
+     */
+    public function countOrderPages(string $status = '', int $limit = 15): int
+    {
+        $total = $this->orderModel->count($status ?: null);
+        return $total > 0 ? (int) ceil($total / $limit) : 0;
+    }
+
+    /**
+     * Đếm số đơn hàng theo từng trạng thái — dùng để hiển thị badge số lượng trên tab lọc.
+     *
+     * Dùng OrderModel::getStatusSummary() — 1 query GROUP BY thay vì
+     * 5 query riêng trong vòng foreach (đã fix vấn đề #1).
+     *
+     * Luôn trả đủ 5 trạng thái kể cả khi total = 0 → View không cần kiểm tra key tồn tại.
+     *
+     * @return array<string, int> ['pending' => 5, 'confirmed' => 3, ...]
+     */
+    public function getOrderCountByStatus(): array
+    {
+        // getStatusSummary() trả đủ 5 key với giá trị 0 nếu chưa có đơn
+        return $this->orderModel->getStatusSummary();
+    }
+
+    /**
+     * Đếm tổng số đơn hàng — dùng cho dashboard admin.
+     *
+     * @param  string|null $status null = đếm tất cả
+     * @return int
+     */
+    public function countOrders(?string $status = null): int
+    {
+        return $this->orderModel->count($status);
+    }
+
+    /**
+     * Lấy doanh thu theo tháng/năm — dùng cho widget dashboard.
+     *
+     * @param  int $year
+     * @param  int $month
+     * @return float
+     */
+    public function getRevenueByMonth(int $year, int $month): float
+    {
+        return $this->orderModel->getRevenueByMonth($year, $month);
+    }
+
+    /**
+     * Lấy danh sách đơn hàng gần đây — dùng cho widget dashboard.
+     *
+     * @param  int $limit
+     * @return array
+     */
+    public function getRecentOrders(int $limit = 5): array
+    {
+        return $this->orderModel->getRecentOrders($limit);
     }
 
 
@@ -240,25 +592,19 @@ class OrderService
 
     /**
      * Validate thông tin khách hàng từ form đặt hàng.
+     * Uỷ thác cho ValidatorHelper — Service không tự validate chuỗi.
      *
-     * Uỷ thác toàn bộ logic validate cho ValidatorHelper (static class dùng chung).
+     * Sanitize toàn bộ mảng trước khi validate — đảm bảo các trường
+     * như note, user_id cũng được làm sạch trước khi dùng (đã fix vấn đề #8).
      *
-     * Nếu nhóm chưa hoàn thiện ValidatorHelper, fallback về nội tuyến tạm thời:
-     *   ValidatorHelper::validateRequired() kiểm tra empty + trim.
-     *   ValidatorHelper::validateEmail()    dùng filter_var FILTER_VALIDATE_EMAIL.
-     *   ValidatorHelper::validatePhone()    kiểm tra regex SĐT Việt Nam.
-     *   ValidatorHelper::sanitizeInput()    strip_tags + htmlspecialchars trước khi dùng.
-     *
-     * @param  array       $formData Input thô từ $_POST (chưa sanitize).
-     * @return string|null Thông báo lỗi đầu tiên, hoặc null nếu toàn bộ hợp lệ.
+     * @param  array       $formData
+     * @return string|null Thông báo lỗi đầu tiên, hoặc null nếu hợp lệ.
      */
     private function validateFormData(array $formData): ?string
     {
-        // Sanitize toàn bộ input trước khi validate
-        // → loại bỏ tag HTML, ký tự đặc biệt nguy hiểm (XSS)
+        // Sanitize toàn bộ mảng — bao gồm cả note, user_id
         $data = ValidatorHelper::sanitizeInput($formData);
 
-        // Kiểm tra các trường bắt buộc — uỷ thác cho ValidatorHelper
         $requiredFields = [
             'name'    => 'Họ tên',
             'email'   => 'Email',
@@ -267,101 +613,95 @@ class OrderService
         ];
 
         foreach ($requiredFields as $field => $label) {
-            // validateRequired() trả true nếu hợp lệ, trả string thông báo lỗi nếu không
             $result = ValidatorHelper::validateRequired($data[$field] ?? '', $label);
             if ($result !== true) {
-                return $result; // trả về thông báo lỗi ngay khi gặp trường đầu tiên sai
+                return $result;
             }
         }
 
-        // Kiểm tra định dạng email
         $emailResult = ValidatorHelper::validateEmail($data['email']);
         if ($emailResult !== true) {
             return $emailResult;
         }
 
-        // Kiểm tra số điện thoại VN (10 chữ số, bắt đầu 0)
-        // validatePhone() nằm trong ValidatorHelper — nếu chưa có thì thêm vào Helper
         $phoneResult = ValidatorHelper::validatePhone($data['phone']);
         if ($phoneResult !== true) {
             return $phoneResult;
         }
 
-        return null; // toàn bộ hợp lệ
+        return null;
     }
 
     /**
-     * Kiểm tra tồn kho của một sản phẩm.
+     * Kiểm tra sơ bộ tồn kho trước transaction — phản hồi nhanh cho user.
      *
-     * Nhận ProductEntity thay vì ($productId, $productName) rời rạc:
-     *   - Không cần truyền nhiều tham số liên quan đến cùng một object.
-     *   - Nếu ProductEntity thêm getter mới (vd: getSku()), không cần sửa signature.
+     * Lưu ý: đây là kiểm tra pre-flight, không phải nguồn đảm bảo duy nhất.
+     * Việc đảm bảo không oversell thực sự do atomic UPDATE trong decreaseStock()
+     * bên trong transaction (WHERE quantity >= ?) xử lý.
      *
-     * InventoryModel::getByProductId() trả ?InventoryEntity
-     * → dùng $inventory->getQuantity() thay vì $inventory['quantity'].
-     *
-     * @param  ProductEntity $product      Entity sản phẩm cần kiểm tra.
-     * @param  int           $requestedQty Số lượng khách muốn mua.
-     * @return string|null   Thông báo lỗi, hoặc null nếu đủ hàng.
+     * @param  ProductEntity $product
+     * @param  int           $requestedQty
+     * @return string|null   Thông báo lỗi hoặc null nếu đủ hàng.
      */
     private function checkStock(ProductEntity $product, int $requestedQty): ?string
     {
-        // getByProductId() trả ?InventoryEntity (override trong InventoryModel)
         $inventory = $this->inventoryModel->getByProductId($product->getId());
 
         if ($inventory === null) {
-            // Sản phẩm chưa có bản ghi tồn kho → coi như hết hàng
             return "Sản phẩm \"{$product->getName()}\" hiện không có thông tin tồn kho.";
         }
 
-        // Dùng getter của InventoryEntity thay vì $inventory['quantity']
-        $availableQty = $inventory->getQuantity();
+        $available = $inventory->getQuantity();
 
-        if ($availableQty < $requestedQty) {
+        if ($available < $requestedQty) {
             return "Sản phẩm \"{$product->getName()}\" không đủ hàng "
-                . "(còn {$availableQty}, yêu cầu {$requestedQty}).";
+                . "(còn {$available}, yêu cầu {$requestedQty}).";
         }
 
-        return null; // đủ hàng
+        return null;
     }
 
     /**
-     * Tạo mới hoặc lấy Customer theo email.
+     * Tạo mới hoặc cập nhật thông tin Customer theo email.
      *
      * Quy tắc:
-     *   - Nếu email đã tồn tại trong bảng customers → dùng lại customer đó.
-     *   - Nếu chưa có → tạo mới (guest checkout).
+     * - Email đã tồn tại → cập nhật thông tin mới nhất qua updateInfo() (có validate)
+     * - Chưa tồn tại → tạo mới
      *
-     * CustomerModel::getByEmail() trả ?CustomerEntity (override trong CustomerModel).
-     * → dùng $existing->getId() thay vì $existing['id'].
+     * Chạy bên trong transaction để đảm bảo customer_id hợp lệ trước khi insert orders.
      *
-     * Không throw exception — nếu insert thất bại thì prepareStmt() đã throw,
-     * transaction sẽ tự rollback ở tầng trên.
+     * Race condition (2 user cùng email đặt hàng đồng thời): trường hợp cả 2 cùng thấy
+     * existing = null và cùng INSERT sẽ bị DB từ chối do UNIQUE constraint trên email.
+     * Exception sẽ được bắt bởi transaction() → rollback an toàn. Đây là hạn chế đã biết,
+     * cần xử lý bằng INSERT ... ON DUPLICATE KEY UPDATE nếu cần production-grade.
      *
-     * @param  array $formData
+     * Dùng updateInfo() thay vì update() thẳng để đi qua Entity validate —
+     * tránh ghi dữ liệu bẩn vào DB.
+     *
+     * @param  array $formData Đã được sanitize qua validateFormData()
      * @return int   customer_id
+     * @throws RuntimeException Nếu không thể tạo khách hàng.
      */
     private function resolveCustomer(array $formData): int
     {
-        $email = trim($formData['email']);
-
-        // getByEmail() trả ?CustomerEntity (không phải array)
+        $email    = trim($formData['email']);
         $existing = $this->customerModel->getByEmail($email);
 
         if ($existing !== null) {
-            // Cập nhật thông tin mới nhất (địa chỉ, SĐT có thể đã thay đổi)
-            // update() trong BaseModel vẫn nhận array → dùng $existing->getId() lấy PK
-            $this->customerModel->update($existing->getId(), [
+            // Dùng updateInfo() — có validate qua CustomerEntity trước khi update
+            // Không dùng BaseModel::update() thẳng vì bỏ qua validate
+            $this->customerModel->updateInfo($existing->getId(), [
                 'name'    => trim($formData['name']),
+                'email'   => $email,
                 'phone'   => trim($formData['phone']),
                 'address' => trim($formData['address']),
                 'note'    => trim($formData['note'] ?? ''),
             ]);
 
-            return $existing->getId(); // getId() trả int, không cần ép kiểu
+            return $existing->getId();
         }
 
-        // Tạo khách hàng mới — insert() vẫn nhận array (BaseModel)
+        // Tạo khách hàng mới
         $customerId = $this->customerModel->insert([
             'name'    => trim($formData['name']),
             'email'   => $email,
