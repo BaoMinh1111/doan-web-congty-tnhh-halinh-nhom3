@@ -1,33 +1,23 @@
 <?php
 
-require_once __DIR__ . '/../services/ProductService.php';
+// require_once đã được xóa — để bootstrap.php lo việc này.
 
 /**
  * Class HomeController
  *
- * Xử lý các trang công khai dành cho người dùng:
- *   - Trang chủ: hiển thị sản phẩm nổi bật + danh sách sản phẩm có thể lọc theo danh mục.
- *   - Hỗ trợ lọc theo danh mục trực tiếp từ trang chủ qua ?category_id=N.
+ * Xử lý các trang công khai:
+ *   - Trang chủ đầy đủ (tất cả sản phẩm + nổi bật).
+ *   - Trang chủ chế độ lọc danh mục (?category_id=N), dùng chung view.
  *
- * Kế thừa BaseController → dùng renderView(), redirect(), get()...
- * Nhận ProductService qua constructor (Dependency Injection).
+ * Kế thừa BaseController → renderView(), redirect(), get()...
  *
  * @package App\Controllers
  * @author  Ha Linh Technology Solutions
  */
 class HomeController extends BaseController
 {
-    // THUỘC TÍNH
-
-    /** @var ProductService */
     private ProductService $productService;
 
-
-    // CONSTRUCTOR
-
-    /**
-     * @param ProductService $productService
-     */
     public function __construct(ProductService $productService)
     {
         parent::__construct();
@@ -35,27 +25,21 @@ class HomeController extends BaseController
     }
 
 
-    // ACTIONS
-
     /**
-     * Trang chủ: hiển thị sản phẩm nổi bật + danh sách sản phẩm.
-     * Hỗ trợ lọc theo danh mục qua query string: ?category_id=3
+     * Trang chủ — hỗ trợ lọc theo danh mục qua ?category_id=N.
      *
-     * Luồng xử lý:
+     * Luồng:
      *   - Không có category_id  → hiển thị tất cả sản phẩm + 8 sản phẩm nổi bật.
-     *   - Có category_id hợp lệ → lọc sản phẩm theo danh mục đó, ẩn section nổi bật.
-     *   - Có category_id nhưng không tồn tại → redirect về trang chủ không tham số.
+     *   - Có category_id hợp lệ → lọc sản phẩm theo danh mục, ẩn section nổi bật.
+     *   - category_id không tồn tại → redirect về / (xóa param rác).
      *
-     * Dữ liệu truyền vào view:
-     *   $products        → array[]              sản phẩm hiển thị (tất cả hoặc đã lọc)
-     *   $featured        → array[]|null         sản phẩm nổi bật (null khi đang lọc)
-     *   $categories      → CategoryEntity[]     tất cả danh mục (menu sidebar / tab lọc)
-     *   $currentCategory → CategoryEntity|null  danh mục đang lọc (null = không lọc)
-     *   $categoryId      → int                  ID danh mục đang lọc (0 = không lọc)
+     * Dữ liệu view:
+     *   $products        → array[]             sản phẩm hiển thị
+     *   $featured        → array[]|null        nổi bật (null khi đang lọc)
+     *   $categories      → CategoryEntity[]    tất cả danh mục (sidebar / tab lọc)
+     *   $currentCategory → CategoryEntity|null danh mục đang lọc
+     *   $categoryId      → int                 0 = không lọc
      *   $pageTitle       → string
-     *
-     * Cách dùng trong router:
-     *   $controller->index();   // đọc category_id từ $_GET tự động
      */
     public function index(): void
     {
@@ -63,28 +47,25 @@ class HomeController extends BaseController
         $categories = $this->productService->getAllCategories();
 
         if ($categoryId > 0) {
-            // --- CHẾ ĐỘ LỌC THEO DANH MỤC ---
+            // ── CHẾ ĐỘ LỌC THEO DANH MỤC ──────────────────────────
 
-            // Kiểm tra category có thực sự tồn tại không
-            $currentCategory = null;
-            foreach ($categories as $cat) {
-                if ($cat->getId() === $categoryId) {
-                    $currentCategory = $cat;
-                    break;
-                }
-            }
+            // Fix foreach trong Controller: dùng getCategoryById() thay vì tự loop
+            // → Controller không làm việc của Service/Model
+            $currentCategory = $this->productService->getCategoryById($categoryId);
 
-            // Category không tồn tại → về trang chủ, xóa param rác khỏi URL
             if ($currentCategory === null) {
+                // Category không tồn tại → về trang chủ, xóa param rác
                 $this->redirect('/');
+                return; // Fix: thêm return sau redirect()
             }
 
-            $products  = $this->productService->searchAndFilter('', $categoryId);
-            $featured  = null; // Ẩn section nổi bật khi đang lọc — không liên quan
+            // Fix searchAndFilter('', $id): dùng getByCategory() — intent rõ ràng hơn
+            $products  = $this->productService->getByCategory($categoryId);
+            $featured  = null; // Ẩn section nổi bật khi đang lọc
             $pageTitle = $currentCategory->getName() . ' — Hà Linh Tech';
 
         } else {
-            // --- CHẾ ĐỘ TRANG CHỦ ĐẦY ĐỦ ---
+            // ── CHẾ ĐỘ TRANG CHỦ ĐẦY ĐỦ ───────────────────────────
             $products        = $this->productService->getProductsWithCategory();
             $featured        = $this->productService->getFeatured(8);
             $currentCategory = null;
@@ -101,14 +82,3 @@ class HomeController extends BaseController
         ]);
     }
 }
-
-/* Các vấn đề cần sửa:
-* require_once nằm trong Controller — Controller không nên biết đường dẫn file trên disk: Xóa dòng require_once, để autoloader lo. Nếu chưa có autoloader thì 
-đặt tất cả require_once vào một file bootstrap.php duy nhất rồi include ở index.php.
-* Thiếu return sau redirect() — code bên dưới vẫn chạy nếu ai đó override redirect() không có exit: Thêm return; ngay sau mọi lời gọi $this->redirect()
-*  Logic tìm $currentCategory bằng foreach nằm trong Controller — Controller đang làm việc của Service/Model: 
-Thêm getCategoryById(int $id) vào ProductService, gọi thẳng từ Controller. Bỏ được vòng foreach và giảm 1 query getAllCategories() không cần thiết khi chỉ cần 
-check tồn tại.
-* searchAndFilter('', $categoryId) — truyền keyword rỗng để lọc danh mục là dùng sai intent của method: Tạo method riêng getByCategory(int $categoryId) trong 
-ProductService. Tách biệt "lọc theo danh mục" và "tìm kiếm theo từ khóa" — sau này dễ thêm logic riêng mà không ảnh hưởng nhau.
-*/
