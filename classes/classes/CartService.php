@@ -5,22 +5,17 @@ require_once 'ProductModel.php';
 /**
  * Class CartService
  *
- * Xử lý toàn bộ logic liên quan đến giỏ hàng:
- * - Thêm sản phẩm
- * - Xoá sản phẩm
- * - Cập nhật số lượng
- * - Tính tổng tiền
- * - Lưu trữ session
+ * Lớp này đóng vai trò xử lý toàn bộ nghiệp vụ giỏ hàng.
+ * Không làm việc với HTTP (Controller xử lý phần đó),
+ * chỉ tập trung xử lý dữ liệu và logic.
  *
- * Nguyên tắc:
- * - Controller KHÔNG xử lý logic → chỉ gọi Service
- * - Service chịu trách nhiệm xử lý nghiệp vụ
+ * Ý tưởng thiết kế:
+ * - Sử dụng session để lưu giỏ hàng (đơn giản, phù hợp đồ án)
+ * - Mỗi sản phẩm trong cart được lưu theo productId
+ * - Dữ liệu lưu gồm: id, name, price, quantity
  */
 class CartService
 {
-    /**
-     * Key lưu cart trong session
-     */
     private string $sessionKey = 'cart';
 
     private ProductModel $productModel;
@@ -32,20 +27,20 @@ class CartService
     {
         /**
          * Dependency Injection:
-         * - Cho phép truyền model từ ngoài (test dễ hơn)
-         * - Nếu không có → tự khởi tạo
+         * Cho phép truyền model từ ngoài (dễ test, đúng chuẩn OOP)
          */
         $this->productModel = $productModel ?? new ProductModel();
 
         /**
-         * Khởi tạo session nếu chưa có
+         * Đảm bảo session luôn tồn tại trước khi thao tác
          */
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
         }
 
         /**
-         * Nếu chưa có giỏ hàng → tạo mới
+         * Nếu chưa có giỏ hàng thì khởi tạo
+         * Tránh lỗi undefined index
          */
         if (!isset($_SESSION[$this->sessionKey])) {
             $_SESSION[$this->sessionKey] = [];
@@ -53,10 +48,12 @@ class CartService
     }
 
 
-    // ================= CORE METHODS =================
+    // ================= LẤY DỮ LIỆU =================
 
     /**
      * Lấy toàn bộ giỏ hàng
+     *
+     * @return array
      */
     public function all(): array
     {
@@ -65,19 +62,53 @@ class CartService
 
 
     /**
-     * Thêm sản phẩm vào giỏ
+     * Đếm tổng số lượng sản phẩm trong giỏ
      *
      * Ý tưởng:
-     * - Nếu sản phẩm đã tồn tại → cộng thêm số lượng
-     * - Nếu chưa có → thêm mới
+     * - Duyệt qua cart
+     * - Cộng tất cả quantity lại
+     */
+    public function getTotalQuantity(): int
+    {
+        $total = 0;
+
+        foreach ($_SESSION[$this->sessionKey] as $item) {
+            $total += $item['quantity'];
+        }
+
+        return $total;
+    }
+
+
+    // ================= THÊM =================
+
+    /**
+     * Thêm sản phẩm vào giỏ
+     *
+     * Luồng xử lý:
+     * 1. Validate input
+     * 2. Lấy sản phẩm từ DB (ProductEntity)
+     * 3. Kiểm tra tồn kho (nếu có)
+     * 4. Nếu đã có → cộng số lượng
+     * 5. Nếu chưa có → tạo mới
      */
     public function add(int $productId, int $quantity = 1): array
     {
         try {
             /**
-             * Lấy thông tin sản phẩm từ DB
+             * Validate dữ liệu đầu vào
              */
-            $product = $this->productModel->findById($productId);
+            if ($productId <= 0 || $quantity <= 0) {
+                return [
+                    'success' => false,
+                    'message' => 'Dữ liệu không hợp lệ'
+                ];
+            }
+
+            /**
+             * Lấy sản phẩm dạng Entity (không phải array)
+             */
+            $product = $this->productModel->getById($productId);
 
             if (!$product) {
                 return [
@@ -86,21 +117,35 @@ class CartService
                 ];
             }
 
+            /**
+             * (Optional) kiểm tra tồn kho
+             * nếu không có inventory thì có thể bỏ qua
+             */
+            if (method_exists($this->productModel, 'checkStock')) {
+                if (!$this->productModel->checkStock($productId, $quantity)) {
+                    return [
+                        'success' => false,
+                        'message' => 'Không đủ hàng trong kho'
+                    ];
+                }
+            }
+
             $cart = &$_SESSION[$this->sessionKey];
 
-            /**
-             * Nếu đã có trong cart → cộng thêm số lượng
-             */
             if (isset($cart[$productId])) {
+                /**
+                 * Nếu đã có → cộng dồn số lượng
+                 */
                 $cart[$productId]['quantity'] += $quantity;
             } else {
                 /**
-                 * Nếu chưa có → tạo item mới
+                 * Nếu chưa có → tạo mới
+                 * Sử dụng getter của Entity để đảm bảo type-safe
                  */
                 $cart[$productId] = [
-                    'id'       => $product['id'],
-                    'name'     => $product['name'],
-                    'price'    => $product['price'],
+                    'id'       => $product->getId(),
+                    'name'     => $product->getName(),
+                    'price'    => (float)$product->getPrice(),
                     'quantity' => $quantity
                 ];
             }
@@ -116,14 +161,16 @@ class CartService
 
             return [
                 'success' => false,
-                'message' => 'Lỗi khi thêm vào giỏ hàng'
+                'message' => 'Lỗi hệ thống khi thêm sản phẩm'
             ];
         }
     }
 
 
+    // ================= XOÁ =================
+
     /**
-     * Xoá sản phẩm khỏi giỏ
+     * Xoá 1 sản phẩm khỏi giỏ
      */
     public function remove(int $productId): array
     {
@@ -133,7 +180,7 @@ class CartService
             if (!isset($cart[$productId])) {
                 return [
                     'success' => false,
-                    'message' => 'Sản phẩm không có trong giỏ'
+                    'message' => 'Sản phẩm không tồn tại trong giỏ'
                 ];
             }
 
@@ -149,11 +196,13 @@ class CartService
 
             return [
                 'success' => false,
-                'message' => 'Lỗi khi xoá sản phẩm'
+                'message' => 'Lỗi khi xoá'
             ];
         }
     }
 
+
+    // ================= CẬP NHẬT =================
 
     /**
      * Cập nhật số lượng sản phẩm
@@ -169,20 +218,33 @@ class CartService
             if (!isset($cart[$productId])) {
                 return [
                     'success' => false,
-                    'message' => 'Sản phẩm không tồn tại trong giỏ'
+                    'message' => 'Không tồn tại trong giỏ'
                 ];
             }
 
-            /**
-             * Nếu quantity = 0 → xoá luôn
-             */
+            if ($quantity < 0) {
+                return [
+                    'success' => false,
+                    'message' => 'Số lượng không hợp lệ'
+                ];
+            }
+
             if ($quantity === 0) {
                 return $this->remove($productId);
             }
 
             /**
-             * Cập nhật số lượng
+             * Có thể kiểm tra tồn kho lại khi update
              */
+            if (method_exists($this->productModel, 'checkStock')) {
+                if (!$this->productModel->checkStock($productId, $quantity)) {
+                    return [
+                        'success' => false,
+                        'message' => 'Vượt quá số lượng tồn kho'
+                    ];
+                }
+            }
+
             $cart[$productId]['quantity'] = $quantity;
 
             return [
@@ -195,11 +257,13 @@ class CartService
 
             return [
                 'success' => false,
-                'message' => 'Lỗi khi cập nhật'
+                'message' => 'Lỗi cập nhật'
             ];
         }
     }
 
+
+    // ================= XOÁ HẾT =================
 
     /**
      * Xoá toàn bộ giỏ hàng
@@ -210,12 +274,14 @@ class CartService
     }
 
 
+    // ================= TỔNG TIỀN =================
+
     /**
-     * Tính tổng tiền giỏ hàng
+     * Tính tổng tiền
      *
      * Ý tưởng:
-     * - Duyệt từng sản phẩm
-     * - Tổng = price * quantity
+     * - mỗi sản phẩm có: price * quantity
+     * - cộng lại toàn bộ
      */
     public function getTotal(): float
     {
@@ -226,5 +292,16 @@ class CartService
         }
 
         return $total;
+    }
+
+
+    // ================= FORMAT =================
+
+    /**
+     * Format tiền (hiển thị đẹp)
+     */
+    public function formatMoney(float $amount): string
+    {
+        return number_format($amount, 0, ',', '.') . ' VND';
     }
 }
