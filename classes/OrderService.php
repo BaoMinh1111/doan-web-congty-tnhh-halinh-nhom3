@@ -3,294 +3,206 @@
 /**
  * Class OrderService
  *
- * Xử lý toàn bộ quy trình tạo đơn hàng từ giỏ hàng (session-based cart),
- * bao gồm áp dụng khuyến mãi nếu có.
+ * Chịu trách nhiệm điều phối toàn bộ quy trình đặt hàng:
+ * - Nhận dữ liệu từ Controller
+ * - Kiểm tra hợp lệ
+ * - Tính tổng tiền
+ * - Áp dụng khuyến mãi
+ * - Lưu dữ liệu xuống database
  *
- * @package App\Services
+ * Nguyên tắc:
+ * - Service KHÔNG xử lý chi tiết logic (ví dụ: tính discount)
+ * - Chỉ gọi các lớp chuyên trách (Entity / Model)
  */
 class OrderService
 {
-    // =========================================================================
-    // THUỘC TÍNH
-    // =========================================================================
-
-    private OrderModel       $orderModel;
+    private OrderModel $orderModel;
     private OrderDetailModel $detailModel;
-    private ProductModel     $productModel;
-    private CustomerModel    $customerModel;
-    private InventoryModel   $inventoryModel;
-    private PromotionModel   $promotionModel;
-
-    // =========================================================================
-    // CONSTRUCTOR
-    // =========================================================================
+    private ProductModel $productModel;
+    private CustomerModel $customerModel;
+    private InventoryModel $inventoryModel;
+    private PromotionModel $promotionModel;
 
     public function __construct(
-        OrderModel       $orderModel,
+        OrderModel $orderModel,
         OrderDetailModel $detailModel,
-        ProductModel     $productModel,
-        CustomerModel    $customerModel,
-        InventoryModel   $inventoryModel,
-        PromotionModel   $promotionModel
+        ProductModel $productModel,
+        CustomerModel $customerModel,
+        InventoryModel $inventoryModel,
+        PromotionModel $promotionModel
     ) {
-        $this->orderModel     = $orderModel;
-        $this->detailModel    = $detailModel;
-        $this->productModel   = $productModel;
-        $this->customerModel  = $customerModel;
+        // Inject dependency để dễ test và tách biệt các tầng
+        $this->orderModel = $orderModel;
+        $this->detailModel = $detailModel;
+        $this->productModel = $productModel;
+        $this->customerModel = $customerModel;
         $this->inventoryModel = $inventoryModel;
         $this->promotionModel = $promotionModel;
     }
 
-    // =========================================================================
-    // TẠO ĐƠN HÀNG TỪ GIỎ HÀNG
-    // =========================================================================
-
     /**
-     * Tạo đơn hàng từ giỏ hàng, có áp dụng khuyến mãi nếu có promotion_id.
+     * Tạo đơn hàng từ giỏ hàng
      *
-     * @param array $formData Thông tin khách hàng (name, email, phone, address, note, user_id)
-     * @param array $cart Giỏ hàng:
-     *                    [
-     *                      ['product_id'=>1, 'quantity'=>2],
-     *                      ['product_id'=>3, 'quantity'=>1],
-     *                    ]
-     * @param int|null $promotionId ID khuyến mãi (nếu khách có mã)
-     * @return array Kết quả ['success'=>bool, 'order_id'=>int hoặc 'message'=>string]
+     * Luồng xử lý:
+     * 1. Validate dữ liệu
+     * 2. Kiểm tra giỏ hàng
+     * 3. Tính tổng tiền
+     * 4. Áp dụng khuyến mãi
+     * 5. Transaction lưu DB
      */
-    public function createOrderFromCart(array $formData, array $cart, ?int $promotionId = null): array
+    public function createOrderFromCart(array $formData, array $cart, ?string $promotionCode = null): array
     {
-        // ── 1. Validate thông tin khách hàng ───────────────────────────────
+        // ── BƯỚC 1: Kiểm tra dữ liệu khách hàng ─────────────────────
+        // Đảm bảo các field như name, email, phone hợp lệ trước khi xử lý tiếp
         $validationError = $this->validateFormData($formData);
         if ($validationError !== null) {
             return ['success' => false, 'message' => $validationError];
         }
 
-        // ── 2. Kiểm tra giỏ hàng không trống ───────────────────────────────
+        // ── BƯỚC 2: Kiểm tra giỏ hàng ─────────────────────
+        // Không cho tạo đơn nếu giỏ rỗng
         if (empty($cart)) {
-            return ['success' => false, 'message' => 'Giỏ hàng trống, không thể tạo đơn hàng.'];
+            return ['success' => false, 'message' => 'Giỏ hàng trống.'];
         }
 
-        $enrichedItems = []; // Lưu thông tin sản phẩm + quantity + giá
-        $totalPrice = 0.0;   // Tổng tiền trước khuyến mãi
+        $enrichedItems = []; // chứa dữ liệu đã xử lý để dùng trong transaction
+        $totalPrice = 0.0;   // tổng tiền ban đầu
 
-        // ── 3. Duyệt giỏ hàng: kiểm tra sản phẩm + tồn kho + tính tổng ──
+        // ── BƯỚC 3: Duyệt từng sản phẩm trong giỏ ─────────────────────
         foreach ($cart as $item) {
+
+            // Ép kiểu để tránh lỗi dữ liệu từ client
             $productId = (int) ($item['product_id'] ?? 0);
             $quantity  = (int) ($item['quantity'] ?? 0);
 
+            // Kiểm tra dữ liệu hợp lệ
             if ($productId <= 0 || $quantity <= 0) {
-                return ['success' => false, 'message' => 'Giỏ hàng không hợp lệ (product_id hoặc quantity <= 0).'];
+                return ['success' => false, 'message' => 'Dữ liệu giỏ hàng không hợp lệ.'];
             }
 
-            // Lấy thông tin sản phẩm từ ProductModel
+            // Lấy sản phẩm từ DB
             $product = $this->productModel->getById($productId);
             if ($product === null) {
-                return ['success' => false, 'message' => "Sản phẩm ID={$productId} không tồn tại."];
+                return ['success' => false, 'message' => 'Sản phẩm không tồn tại.'];
             }
 
             // Kiểm tra tồn kho
+            // Logic này tách riêng để dễ tái sử dụng và dễ đọc
             $stockError = $this->checkStock($product, $quantity);
             if ($stockError !== null) {
                 return ['success' => false, 'message' => $stockError];
             }
 
-            // Lưu giá tại thời điểm mua → dùng cho order detail
-            $priceAtPurchase = $product->getPrice();
-            $totalPrice += $priceAtPurchase * $quantity;
+            // Lấy giá tại thời điểm mua
+            // Không dùng lại giá từ DB sau này để tránh thay đổi
+            $price = $product->getPrice();
 
-            // Thêm vào mảng enrichedItems để dùng trong transaction
+            // Cộng vào tổng tiền
+            $totalPrice += $price * $quantity;
+
+            // Lưu lại để dùng trong transaction (tránh query lại DB)
             $enrichedItems[] = [
-                'product_id'        => $product->getId(),
-                'quantity'          => $quantity,
-                'price_at_purchase' => $priceAtPurchase,
-                'product'           => $product, // giữ object để dùng thông báo lỗi
+                'product_id' => $product->getId(),
+                'quantity'   => $quantity,
+                'price'      => $price,
+                'product'    => $product,
             ];
         }
 
-        // ── 4. Áp dụng khuyến mãi nếu có ───────────────────────────────
-        if ($promotionId !== null) {
-            $promo = $this->promotionModel->getById($promotionId);
-            if ($promo) {
-                // Loại khuyến mãi
-                if ($promo['type'] === 'percent') {
-                    $totalPrice *= (100 - $promo['value']) / 100; // giảm theo %
-                } elseif ($promo['type'] === 'fixed') {
-                    $totalPrice -= $promo['value']; // giảm cố định
-                }
-                $totalPrice = max(0, $totalPrice); // tránh âm
-            } else {
-                return ['success' => false, 'message' => 'Khuyến mãi không tồn tại hoặc đã hết hạn.'];
+        // ── BƯỚC 4: Xử lý khuyến mãi ─────────────────────
+        $promo = null;
+
+        if ($promotionCode !== null) {
+
+            // Lấy thông tin mã giảm giá theo code (thực tế người dùng nhập code)
+            $promo = $this->promotionModel->getByCode($promotionCode);
+
+            if ($promo === null) {
+                return ['success' => false, 'message' => 'Mã khuyến mãi không tồn tại.'];
             }
+
+            // Kiểm tra điều kiện sử dụng:
+            // - còn hạn
+            // - còn lượt dùng
+            // - đủ giá trị đơn hàng
+            if (!$promo->canUse($totalPrice)) {
+                return [
+                    'success' => false,
+                    'message' => $promo->getFailMessage($totalPrice)
+                ];
+            }
+
+            // Tính số tiền được giảm
+            // Logic này nằm trong Entity để đảm bảo không bị lặp
+            $discount = $promo->calculateDiscount($totalPrice);
+
+            // Áp dụng giảm giá
+            $totalPrice = max(0, $totalPrice - $discount);
         }
 
-        // ── 5. Thực hiện transaction: tạo Customer, Order, OrderDetail, trừ tồn kho ──
+        // ── BƯỚC 5: Transaction ─────────────────────
+        // Đảm bảo tất cả thao tác DB thành công hoặc rollback toàn bộ
         try {
-            $orderId = $this->orderModel->transaction(function () use ($formData, $enrichedItems, $totalPrice, $promotionId) {
+            $orderId = $this->orderModel->transaction(function () use ($formData, $enrichedItems, $totalPrice, $promo) {
 
-                // 5a. Lấy hoặc tạo Customer
+                // Kiểm tra lại promotion trong transaction để tránh lỗi đồng thời
+                if ($promo !== null && !$promo->canUse($totalPrice)) {
+                    throw new RuntimeException($promo->getFailMessage($totalPrice));
+                }
+
+                // Tạo hoặc cập nhật khách hàng
                 $customerId = $this->resolveCustomer($formData);
 
-                // 5b. Tạo Order
-                $orderData = [
+                // Tạo đơn hàng
+                $orderId = $this->orderModel->insert([
                     'customer_id' => $customerId,
                     'user_id'     => $formData['user_id'] ?? null,
                     'total_price' => $totalPrice,
                     'status'      => 'pending',
                     'note'        => trim($formData['note'] ?? ''),
                     'created_at'  => date('Y-m-d H:i:s'),
-                ];
-                if ($promotionId !== null) {
-                    $orderData['promotion_id'] = $promotionId;
+                    'promotion_id'=> $promo ? $promo->getId() : null,
+                ]);
+
+                if ($orderId <= 0) {
+                    throw new RuntimeException('Tạo đơn hàng thất bại.');
                 }
 
-                $orderId = $this->orderModel->insert($orderData);
-                if ($orderId <= 0) throw new RuntimeException('Tạo đơn hàng thất bại.');
-
-                // 5c. Tạo từng OrderDetail
+                // Lưu chi tiết đơn hàng
                 foreach ($enrichedItems as $item) {
                     $this->detailModel->insert([
-                        'order_id'          => $orderId,
-                        'product_id'        => $item['product_id'],
-                        'quantity'          => $item['quantity'],
-                        'price_at_purchase' => $item['price_at_purchase'],
+                        'order_id' => $orderId,
+                        'product_id' => $item['product_id'],
+                        'quantity' => $item['quantity'],
+                        'price_at_purchase' => $item['price'],
                     ]);
                 }
 
-                // 5d. Trừ tồn kho
+                // Trừ tồn kho
                 foreach ($enrichedItems as $item) {
-                    $decreased = $this->inventoryModel->decreaseStock($item['product_id'], $item['quantity']);
-                    if (!$decreased) {
-                        throw new RuntimeException("Trừ tồn kho thất bại cho sản phẩm \"{$item['product']->getName()}\".");
+                    if (!$this->inventoryModel->decreaseStock($item['product_id'], $item['quantity'])) {
+                        throw new RuntimeException('Không thể cập nhật tồn kho.');
                     }
                 }
 
                 return $orderId;
             });
 
-            // ── 6. Xoá giỏ hàng khỏi session sau khi transaction thành công ──
+            // ── BƯỚC 6: Sau khi thành công ─────────────────────
             SessionHelper::clearCart();
+
+            // Cập nhật số lần sử dụng mã
+            if ($promo !== null) {
+                $this->promotionModel->increaseUsedCount($promo->getId());
+            }
 
             return ['success' => true, 'order_id' => $orderId];
 
         } catch (RuntimeException $e) {
-            // Lỗi logic nghiệp vụ → trả về thông báo chi tiết
             return ['success' => false, 'message' => $e->getMessage()];
-
         } catch (Throwable $e) {
-            // Lỗi không mong đợi → log hệ thống, trả thông báo chung
-            error_log('[OrderService] Unexpected error: ' . $e->getMessage());
-            return ['success' => false, 'message' => 'Hệ thống gặp sự cố. Vui lòng thử lại sau.'];
+            error_log($e->getMessage());
+            return ['success' => false, 'message' => 'Lỗi hệ thống.'];
         }
-    }
-
-    // =========================================================================
-    // CẬP NHẬT TRẠNG THÁI ĐƠN HÀNG
-    // =========================================================================
-
-    public function updateOrderStatus(int $orderId, string $status): array
-    {
-        $validStatuses = ['pending','confirmed','shipped','completed','cancelled'];
-
-        if (!in_array($status, $validStatuses, true)) {
-            return ['success'=>false,'message'=>'Trạng thái không hợp lệ'];
-        }
-
-        $updated = $this->orderModel->update($orderId,['status'=>$status]);
-
-        return $updated
-            ? ['success'=>true,'message'=>'Cập nhật trạng thái thành công.']
-            : ['success'=>false,'message'=>'Không tìm thấy đơn hàng hoặc trạng thái không thay đổi.'];
-    }
-
-    // =========================================================================
-    // PRIVATE HELPERS
-    // =========================================================================
-
-    // 1. Validate form data khách hàng
-    private function validateFormData(array $formData): ?string
-    {
-        $data = ValidatorHelper::sanitizeInput($formData);
-
-        $requiredFields = [
-            'name' => 'Họ tên',
-            'email'=> 'Email',
-            'phone'=> 'Số điện thoại',
-            'address'=> 'Địa chỉ',
-        ];
-
-        foreach ($requiredFields as $field => $label) {
-            $result = ValidatorHelper::validateRequired($data[$field] ?? '', $label);
-            if ($result !== true) return $result;
-        }
-
-        $emailResult = ValidatorHelper::validateEmail($data['email']);
-        if ($emailResult !== true) return $emailResult;
-
-        $phoneResult = ValidatorHelper::validatePhone($data['phone']);
-        if ($phoneResult !== true) return $phoneResult;
-
-        return null;
-    }
-
-    // 2. Kiểm tra tồn kho
-    private function checkStock(ProductEntity $product, int $requestedQty): ?string
-    {
-        $inventory = $this->inventoryModel->getByProductId($product->getId());
-        if ($inventory === null) {
-            return "Sản phẩm \"{$product->getName()}\" hiện không có thông tin tồn kho.";
-        }
-        if ($inventory->getQuantity() < $requestedQty) {
-            return "Sản phẩm \"{$product->getName()}\" không đủ hàng (còn {$inventory->getQuantity()}, yêu cầu {$requestedQty}).";
-        }
-        return null;
-    }
-
-    // 3. Lấy hoặc tạo Customer theo email
-    private function resolveCustomer(array $formData): int
-    {
-        $email = trim($formData['email']);
-        $existing = $this->customerModel->getByEmail($email);
-
-        if ($existing !== null) {
-            // Cập nhật thông tin mới nhất nếu đã tồn tại
-            $this->customerModel->update($existing->getId(), [
-                'name'    => trim($formData['name']),
-                'phone'   => trim($formData['phone']),
-                'address' => trim($formData['address']),
-                'note'    => trim($formData['note'] ?? ''),
-            ]);
-            return $existing->getId();
-        }
-
-        // Tạo khách hàng mới
-        $customerId = $this->customerModel->insert([
-            'name'    => trim($formData['name']),
-            'email'   => $email,
-            'phone'   => trim($formData['phone']),
-            'address' => trim($formData['address']),
-            'user_id' => $formData['user_id'] ?? null,
-            'note'    => trim($formData['note'] ?? ''),
-        ]);
-
-        if ($customerId <= 0) throw new RuntimeException('Không thể tạo khách hàng.');
-        return $customerId;
     }
 }
-
-/* Các vấn đề cần sửa:
-* getById() trả PromotionEntity nhưng truy cập $promo['type'] và $promo['value'] như mảng: Entity không phải array — PHP ném Cannot use object of type 
-PromotionEntity as array. Phải dùng $promo->getType() và $promo->getValue(). Hoặc tốt hơn: bỏ hẳn đoạn tự tính, gọi $promo->calculateDiscount($totalPrice).
-* Tự tính discount trong Service thay vì dùng PromotionEntity::calculateDiscount(): Logic tính discount đã có trong Entity. Viết lại ở Service là duplicate — 
-nếu sau này thay đổi công thức phải sửa 2 chỗ. Gọi $discount = $promo->calculateDiscount($totalPrice) là đủ.
-*  Không gọi canUse() trước khi áp promotion — không kiểm tra hết hạn, minOrder, isActive: Mã hết hạn hoặc inactive vẫn được áp dụng bình thường. 
-Phải gọi $promo->canUse($totalPrice) trước, nếu false thì trả lỗi với $promo->getFailMessage($totalPrice).
-* Nhận ?int $promotionId từ ngoài — người dùng không biết ID, họ chỉ biết code: 
-Form checkout luôn có ô nhập mã giảm giá dạng string (SALE10), không phải ID. Nên đổi tham số thành ?string $promotionCode rồi dùng getByCode() thay vì getById().
-* Không gọi increaseUsedCount() sau khi đơn hàng tạo thành công: Mã được áp dụng nhưng used_count không tăng → mã có max_uses=1 vẫn dùng được mãi. 
-Gọi increaseUsedCount() ngoài transaction, sau SessionHelper::clearCart().
-* Áp promotion trước transaction nhưng check tồn kho cũng trước transaction — có khoảng hở race condition: 2 request đồng thời có thể cùng pass check tồn kho 
-rồi cùng tạo đơn. Việc trừ tồn kho bên trong transaction đã giảm thiểu, nhưng check promotion nên thực hiện lại bên trong transaction để đảm bảo used_count 
-chưa vượt max_uses.
-* resolveCustomer() gọi $this->customerModel->update() trực tiếp thay vì updateInfo() — bỏ qua validate: CustomerModel::updateInfo() có validate qua Entity 
-trước khi update. Gọi update() thẳng bỏ qua bước đó — dữ liệu bẩn có thể ghi vào DB.
-*/
