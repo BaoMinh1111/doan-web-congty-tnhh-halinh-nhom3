@@ -1,38 +1,22 @@
 <?php
 
-require_once __DIR__ . '/../models/ProductModel.php';
-require_once __DIR__ . '/../models/CategoryModel.php';
+// require_once đã được xóa — để bootstrap.php lo việc này.
 
 /**
  * Class ProductService
  *
  * Xử lý logic nghiệp vụ liên quan đến sản phẩm và danh mục.
- * Là tầng trung gian giữa Controller và Model — Controller không gọi Model trực tiếp,
- * mà gọi Service để nhận dữ liệu đã được xử lý và kết hợp sẵn.
- *
- * Nhận Model qua constructor (Dependency Injection) thay vì tự new bên trong
- * → dễ test, dễ thay thế Model giả khi unit test.
+ * Là tầng trung gian giữa Controller và Model.
+ * Nhận Model qua constructor (Dependency Injection).
  *
  * @package App\Services
  * @author  Ha Linh Technology Solutions
  */
 class ProductService
 {
-    // THUỘC TÍNH
-
-    /** @var ProductModel */
-    private ProductModel $productModel;
-
-    /** @var CategoryModel */
+    private ProductModel  $productModel;
     private CategoryModel $categoryModel;
 
-
-    // CONSTRUCTOR
-
-    /**
-     * @param ProductModel  $productModel
-     * @param CategoryModel $categoryModel
-     */
     public function __construct(ProductModel $productModel, CategoryModel $categoryModel)
     {
         $this->productModel  = $productModel;
@@ -40,24 +24,51 @@ class ProductService
     }
 
 
-    // PHƯƠNG THỨC CHÍNH
+    // ── PRIVATE HELPER ────────────────────────────────────────
 
     /**
-     * Lấy tất cả sản phẩm kèm thông tin danh mục đã được nhúng sẵn.
+     * Build lookup map [category_id => CategoryEntity] trong 1 query duy nhất.
      *
-     * Cách hoạt động:
-     *   1. Lấy tất cả sản phẩm từ ProductModel → ProductEntity[].
-     *   2. Lấy tất cả danh mục từ CategoryModel → build lookup map [id => CategoryEntity].
-     *   3. Kết hợp: mỗi phần tử trả về là mảng gồm product + category đã gắn vào.
+     * Nhất quán: cả getProductsWithCategory() lẫn getFeatured() đều dùng helper này
+     * thay vì mỗi method tự load category theo cách riêng.
      *
-     * Trả về mảng thay vì Entity vì kết quả là dữ liệu join từ 2 bảng,
-     * không map 1-1 vào một Entity đơn lẻ.
+     * Bảng categories thường nhỏ (< 50 bản ghi) nên load all là hợp lý,
+     * đơn giản hơn getByIds() và tránh N query riêng lẻ trong loop.
      *
-     * Cách dùng:
-     *   $items = $productService->getProductsWithCategory();
-     *   // $items[0] = ['product' => ProductEntity, 'category' => CategoryEntity|null]
+     * @return array<int, CategoryEntity>
+     */
+    private function buildCategoryMap(): array
+    {
+        $map = [];
+        foreach ($this->categoryModel->getAll() as $cat) {
+            $map[$cat->getId()] = $cat;
+        }
+        return $map;
+    }
+
+    /**
+     * Gắn category vào danh sách products từ map sẵn có.
+     * Tái sử dụng pattern chung cho mọi method trả array[].
      *
-     * @return array[] Mỗi phần tử là ['product' => ProductEntity, 'category' => CategoryEntity|null].
+     * @param  ProductEntity[] $products
+     * @param  array           $categoryMap [id => CategoryEntity]
+     * @return array[]         [['product' => ..., 'category' => ...], ...]
+     */
+    private function attachCategories(array $products, array $categoryMap): array
+    {
+        return array_values(array_map(fn(ProductEntity $p) => [
+            'product'  => $p,
+            'category' => $categoryMap[$p->getCategoryId()] ?? null,
+        ], $products));
+    }
+
+
+    // ── PUBLIC API ────────────────────────────────────────────
+
+    /**
+     * Lấy tất cả sản phẩm kèm danh mục — dùng cho trang chủ chế độ đầy đủ.
+     *
+     * @return array[] [['product' => ProductEntity, 'category' => CategoryEntity|null], ...]
      */
     public function getProductsWithCategory(): array
     {
@@ -67,30 +78,17 @@ class ProductService
             return [];
         }
 
-        // Build lookup map để tránh N+1 query
-        // [category_id => CategoryEntity]
-        $categoryMap = [];
-        foreach ($this->categoryModel->getAll() as $category) {
-            $categoryMap[$category->getId()] = $category;
-        }
-
-        return array_map(function (ProductEntity $product) use ($categoryMap) {
-            return [
-                'product'  => $product,
-                'category' => $categoryMap[$product->getCategoryId()] ?? null,
-            ];
-        }, $products);
+        return $this->attachCategories($products, $this->buildCategoryMap());
     }
 
     /**
-     * Lấy sản phẩm nổi bật (mới nhất) để hiển thị ở trang chủ.
-     * Kèm thông tin danh mục đã gắn sẵn.
+     * Lấy sản phẩm nổi bật (mới nhất) kèm danh mục.
      *
-     * Cách dùng:
-     *   $featured = $productService->getFeatured(8);
+     * Fix N+1: trước đây gọi getById() trong loop (N query).
+     * Bây giờ dùng buildCategoryMap() — 1 query duy nhất, nhất quán với getProductsWithCategory().
      *
-     * @param  int   $limit Số sản phẩm tối đa cần lấy. Mặc định 8.
-     * @return array[]      Mỗi phần tử là ['product' => ProductEntity, 'category' => CategoryEntity|null].
+     * @param  int   $limit Mặc định 8.
+     * @return array[]
      */
     public function getFeatured(int $limit = 8): array
     {
@@ -104,40 +102,14 @@ class ProductService
             return [];
         }
 
-        // Chỉ load những danh mục thực sự xuất hiện trong kết quả
-        // → tránh load toàn bộ bảng categories khi chỉ cần một phần
-        $categoryIds = array_unique(array_map(
-            fn(ProductEntity $p) => $p->getCategoryId(),
-            $products
-        ));
-
-        $categoryMap = [];
-        foreach ($categoryIds as $catId) {
-            $cat = $this->categoryModel->getById($catId);
-            if ($cat !== null) {
-                $categoryMap[$catId] = $cat;
-            }
-        }
-
-        return array_map(function (ProductEntity $product) use ($categoryMap) {
-            return [
-                'product'  => $product,
-                'category' => $categoryMap[$product->getCategoryId()] ?? null,
-            ];
-        }, $products);
+        return $this->attachCategories($products, $this->buildCategoryMap());
     }
 
     /**
-     * Lấy chi tiết một sản phẩm kèm thông tin danh mục.
-     * Dùng cho trang chi tiết sản phẩm.
+     * Lấy chi tiết 1 sản phẩm kèm danh mục — dùng cho trang detail.
      *
-     * Cách dùng:
-     *   $detail = $productService->getProductDetail(5);
-     *   if ($detail === null) { // sản phẩm không tồn tại }
-     *   // $detail = ['product' => ProductEntity, 'category' => CategoryEntity|null]
-     *
-     * @param  int        $id Product ID.
-     * @return array|null     null nếu sản phẩm không tồn tại.
+     * @param  int        $id
+     * @return array|null     null nếu không tồn tại.
      */
     public function getProductDetail(int $id): ?array
     {
@@ -147,97 +119,90 @@ class ProductService
             return null;
         }
 
-        $category = $this->categoryModel->getById($product->getCategoryId());
-
         return [
             'product'  => $product,
-            'category' => $category,
+            'category' => $this->categoryModel->getById($product->getCategoryId()),
         ];
     }
 
     /**
-     * Tìm kiếm và lọc sản phẩm theo từ khoá và/hoặc danh mục.
+     * Lấy sản phẩm theo danh mục.
      *
-     * Logic kết hợp:
-     *   - Chỉ keyword          → tìm theo tên + mô tả (LIKE).
-     *   - Chỉ categoryId       → lấy tất cả sản phẩm thuộc danh mục đó.
-     *   - Cả keyword + category → tìm theo tên + mô tả, sau đó lọc tiếp theo category.
-     *   - Cả 2 đều rỗng/0      → trả mảng rỗng (không dump toàn bộ bảng).
-     *
-     * Kết quả kèm thông tin category đã gắn sẵn, sẵn sàng cho json_encode() khi AJAX.
+     * Method độc lập, tách biệt khỏi searchAndFilter().
+     * Intent rõ ràng: "lọc theo danh mục" ≠ "tìm kiếm theo từ khoá".
+     * Sau này có thể thêm sort/paginate riêng mà không ảnh hưởng searchAndFilter().
      *
      * Cách dùng:
-     *   // Tìm kiếm AJAX từ search bar
-     *   $results = $productService->searchAndFilter('RTX 4090', 0);
+     *   $items = $productService->getByCategory(3);
      *
-     *   // Lọc theo danh mục (từ menu sidebar)
-     *   $results = $productService->searchAndFilter('', 3);
-     *
-     *   // Vừa tìm vừa lọc
-     *   $results = $productService->searchAndFilter('Intel', 2);
-     *
-     * @param  string $keyword    Từ khoá tìm kiếm (trim trước khi truyền vào).
-     * @param  int    $categoryId ID danh mục cần lọc. 0 = không lọc.
-     * @return array[]            Mảng kết quả, mỗi phần tử là
-     *                            ['product' => ProductEntity, 'category' => CategoryEntity|null].
-     *                            Rỗng nếu không tìm thấy hoặc cả 2 tham số đều trống/0.
+     * @param  int   $categoryId
+     * @return array[]
      */
-    public function searchAndFilter(string $keyword, int $categoryId = 0): array
+    public function getByCategory(int $categoryId): array
     {
-        $keyword = trim($keyword);
-
-        // Guard: cả 2 đều trống → không query, trả rỗng
-        if ($keyword === '' && $categoryId <= 0) {
+        if ($categoryId <= 0) {
             return [];
         }
 
-        // Lấy kết quả từ Model theo điều kiện
-        if ($keyword !== '' && $categoryId > 0) {
-            // Vừa tìm kiếm vừa lọc category
-            $products = $this->productModel->search($keyword);
-            $products = array_filter(
-                $products,
-                fn(ProductEntity $p) => $p->getCategoryId() === $categoryId
-            );
-        } elseif ($keyword !== '') {
-            // Chỉ tìm kiếm
-            $products = $this->productModel->search($keyword);
-        } else {
-            // Chỉ lọc theo category
-            $products = $this->productModel->getByCategory($categoryId);
-        }
+        $products = $this->productModel->getByCategory($categoryId);
 
         if (empty($products)) {
             return [];
         }
 
-        // Gắn thông tin category vào kết quả
-        $categoryMap = [];
-        foreach ($products as $product) {
-            $catId = $product->getCategoryId();
-            if (!isset($categoryMap[$catId])) {
-                $cat = $this->categoryModel->getById($catId);
-                if ($cat !== null) {
-                    $categoryMap[$catId] = $cat;
-                }
-            }
-        }
-
-        return array_values(array_map(
-            function (ProductEntity $product) use ($categoryMap) {
-                return [
-                    'product'  => $product,
-                    'category' => $categoryMap[$product->getCategoryId()] ?? null,
-                ];
-            },
-            $products
-        ));
+        return $this->attachCategories($products, $this->buildCategoryMap());
     }
 
     /**
-     * Lấy tất cả danh mục để hiển thị menu sidebar / dropdown lọc.
-     * Wrapper đơn giản quanh CategoryModel::getAll() —
-     * Controller không cần inject thêm CategoryModel riêng.
+     * Lấy thông tin 1 danh mục theo ID.
+     * Dùng cho Controller khi chỉ cần check tồn tại hoặc lấy tên —
+     * không cần load toàn bộ danh sách rồi foreach.
+     *
+     * @param  int                $id
+     * @return CategoryEntity|null
+     */
+    public function getCategoryById(int $id): ?CategoryEntity
+    {
+        return $this->categoryModel->getById($id);
+    }
+
+    /**
+     * Tìm kiếm sản phẩm theo từ khoá, tuỳ chọn kết hợp lọc danh mục.
+     *
+     * Intent: "tìm kiếm" — khác getByCategory() là "lọc theo danh mục".
+     *
+     * Fix DB filter: khi có cả keyword + categoryId, dùng ProductModel::searchByCategory()
+     * (WHERE name LIKE ? AND category_id = ?) thay vì tải toàn bộ rồi array_filter PHP-side.
+     *
+     * Guard: cả 2 rỗng → trả [] ngay, không query DB.
+     *
+     * @param  string $keyword
+     * @param  int    $categoryId 0 = không lọc theo danh mục.
+     * @return array[]
+     */
+    public function searchAndFilter(string $keyword, int $categoryId = 0): array
+    {
+        $keyword = trim($keyword);
+
+        if ($keyword === '' && $categoryId <= 0) {
+            return [];
+        }
+
+        $products = ($keyword !== '' && $categoryId > 0)
+            // 1 query DB với WHERE name LIKE ? AND category_id = ?
+            ? $this->productModel->searchByCategory($keyword, $categoryId)
+            // Chỉ keyword
+            : $this->productModel->search($keyword);
+
+        if (empty($products)) {
+            return [];
+        }
+
+        return $this->attachCategories($products, $this->buildCategoryMap());
+    }
+
+    /**
+     * Lấy tất cả danh mục — dùng cho menu sidebar, dropdown lọc.
      *
      * @return CategoryEntity[]
      */
@@ -245,17 +210,20 @@ class ProductService
     {
         return $this->categoryModel->getAll();
     }
-}
 
-/* Các vấn đề cần sửa:
-* getFeatured() gọi getById() trong vòng foreach — N query cho N category: Đã collect $categoryIds rồi nhưng vẫn query từng cái một trong loop. Nếu featured có 8
-sản phẩm thuộc 4 danh mục khác nhau thì 4 query riêng. Nên thêm CategoryModel::getByIds(array $ids) để 1 query lấy tất cả, giống pattern của getProductsWithCategory().
-* searchAndFilter() khi có cả keyword + category: tìm theo keyword trước rồi array_filter theo category trong PHP — không dùng DB để lọc kết hợp: Nếu search trả 
-500 sản phẩm nhưng chỉ 3 cái thuộc category đó thì load 500 row về PHP rồi bỏ 497. Nên thêm ProductModel::searchByCategory($keyword, $categoryId) với WHERE name 
-LIKE ? AND category_id = ? để DB lọc luôn.
-* getProductsWithCategory() load toàn bộ bảng categories dù chỉ cần một phần — không nhất quán với cách getFeatured() làm: Hai method cùng làm việc gắn category 
-nhưng theo 2 cách khác nhau. Nên thống nhất: hoặc cả 2 load all categories (đơn giản hơn), hoặc cả 2 chỉ load category cần thiết (hiệu quả hơn). Hiện tại không 
-nhất quán gây khó đọc.
-* Thiếu getByCategory() public method — HomeController hiện phải dùng searchAndFilter('', $categoryId) thay thế: Nên thêm method wrapper rõ ràng: public function 
-getByCategory(int $categoryId): array gọi $this->productModel->getByCategory($categoryId) rồi gắn category.
-*/
+    /**
+     * Đếm số sản phẩm thuộc một danh mục.
+     * Dùng trong AdminController trước khi xóa danh mục.
+     *
+     * @param  int $categoryId
+     * @return int
+     */
+    public function countProductsByCategory(int $categoryId): int
+    {
+        if ($categoryId <= 0) {
+            return 0;
+        }
+
+        return count($this->productModel->getByCategory($categoryId));
+    }
+}
