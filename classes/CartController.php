@@ -260,3 +260,11 @@ class CartController extends BaseController
         }
     }
 }
+
+/* Các vấn đề cần sửa: 
+* getInput() dùng htmlspecialchars() — encode HTML nhưng không sanitize SQL hay strip tags, và encode sớm có thể làm hỏng dữ liệu khi lưu DB: 
+Với input số (product_id, quantity) thì cast (int) đã an toàn, không cần htmlspecialchars(). Với input text thì encode khi output ra HTML mới đúng chỗ, không phải 
+khi đọc vào — nếu lưu DB thì DB sẽ chứa &amp; thay vì &. Nên bỏ htmlspecialchars ở đây, chỉ encode khi render view.
+* getInput() tự viết lại logic đã có trong BaseController::post() / get(): BaseController đã có post() và get() với cast kiểu theo $default. Nên bỏ getInput() và 
+dùng $this->post('product_id', 0) — gọn hơn, nhất quán toàn project.
+*/
