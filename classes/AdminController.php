@@ -379,3 +379,5 @@ class AdminController extends BaseController
         }
     }
 }
+
+/*Dựa theo lớp AdminController-1 trong branch của Nghi để viết thêm manageCategories (CRUD) và manageCustomers (list + search)*/
