@@ -598,3 +598,16 @@ class AdminController extends BaseController
         ]);
     }
 }
+
+/* Các vấn đề cần sửa: 
+* renderAdmin() gọi FlashMessage::get() — nhưng các method như manageOrders() đã gọi FlashMessage::get() và truyền vào $data rồi, renderAdmin() lại gọi thêm lần 
+nữa → messages bị đọc 2 lần, lần 2 luôn trả rỗng: Khi manageOrders() gọi renderAdmin(..., ['flash' => FlashMessage::get(), ...]) thì messages đã bị xoá khỏi 
+session. renderAdmin() gọi lại FlashMessage::get() lần 2 → luôn rỗng → layout không bao giờ nhận được flash. Chọn 1 trong 2: bỏ FlashMessage::get() trong 
+renderAdmin(), hoặc bỏ trong từng method và để renderAdmin() tự đọc.
+* VALID_ORDER_STATUSES không khớp với OrderService — Service dùng 'confirmed' và 'completed', Controller dùng 'processing' và 'delivered': Khi admin chọn trạng 
+thái 'delivered', Controller validate pass nhưng Service reject vì không có trong danh sách của Service. Cần thống nhất 1 nguồn sự thật — nên định nghĩa ở Entity 
+hoặc Service rồi Controller import vào, không tự định nghĩa lại.
+* verifyCsrfToken() và generateCsrfToken() được gọi nhưng không thấy định nghĩa ở đâu trong code đã gửi
+* updateOrderStatus() quá dài — ~80 dòng, lặp pattern isAjax() ? jsonResponse : FlashMessage + redirect đến 5 lần: Nên tách helper respondError(string $msg, 
+int $status, string $redirectUrl) để gộp 2 nhánh AJAX/non-AJAX lại. Giảm từ ~80 dòng xuống ~40 dòng, dễ đọc hơn nhiều.
+*/
