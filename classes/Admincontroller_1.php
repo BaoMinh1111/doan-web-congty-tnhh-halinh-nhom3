@@ -248,46 +248,36 @@ class AdminMiddleware
  * Class AdminController (Phần 2 — Quản lý đơn hàng)
  *
  * Tách riêng với phần manageProducts để leader review song song.
- * Khi merge: copy 3 method và 2 hằng số vào AdminController.php chính.
+ * Khi merge: copy 3 method, 1 hằng số ORDER_STATUS_LABELS và 2 private method
+ * vào AdminController.php chính.
  *
- * Phụ thuộc (đã có trong AdminController.php chính):
- *   - $this->orderService   (OrderService)
- *   - $this->renderAdmin()  (private method)
- *   - $this->requireAdmin(), verifyCsrfToken(), generateCsrfToken()
- *   - $this->post(), get(), isPost(), isAjax(), redirect(), jsonResponse()
+ * Nguồn sự thật cho trạng thái đơn hàng:
+ *   Dùng OrderEntity::VALID_STATUSES — không tự định nghĩa lại trong Controller
+ *   để tránh lệch giữa Controller, Service và Entity.
  *
- * Hằng số cần thêm vào đầu class AdminController:
- *   private const VALID_ORDER_STATUSES = ['pending','processing','shipped','delivered','cancelled'];
- *   private const ORDER_STATUS_LABELS  = ['pending'=>'Chờ xử lý','processing'=>'Đang xử lý',
- *                                         'shipped'=>'Đang giao','delivered'=>'Đã giao','cancelled'=>'Đã huỷ'];
+ * CSRF methods (generateCsrfToken, verifyCsrfToken):
+ *   Đã định nghĩa trong BaseController (protected) — AdminController kế thừa dùng thẳng,
+ *   không cần định nghĩa lại ở đây.
  *
  * @package App\Controllers
  * @author  Ha Linh Technology Solutions
  */
 class AdminController extends BaseController
 {
-    // HẰNG SỐ — trạng thái đơn hàng
-
-    /**
-     * Danh sách trạng thái hợp lệ — khớp với cột status bảng orders.
-     */
-    private const VALID_ORDER_STATUSES = [
-        'pending',
-        'processing',
-        'shipped',
-        'delivered',
-        'cancelled',
-    ];
+    // HẰNG SỐ — nhãn hiển thị trạng thái đơn hàng
 
     /**
      * Nhãn tiếng Việt hiển thị cho từng trạng thái.
+     * Key khớp chính xác với 5 hằng số public của OrderEntity:
+     *   STATUS_PENDING / STATUS_CONFIRMED / STATUS_SHIPPED / STATUS_COMPLETED / STATUS_CANCELLED.
+     * STATUS_LABELS trong OrderEntity là private nên Controller tự định nghĩa nhãn UI ở đây.
      */
     private const ORDER_STATUS_LABELS = [
-        'pending'    => 'Chờ xử lý',
-        'processing' => 'Đang xử lý',
-        'shipped'    => 'Đang giao',
-        'delivered'  => 'Đã giao',
-        'cancelled'  => 'Đã huỷ',
+        OrderEntity::STATUS_PENDING   => 'Đang chờ xác nhận',
+        OrderEntity::STATUS_CONFIRMED => 'Đã xác nhận',
+        OrderEntity::STATUS_SHIPPED   => 'Đang giao hàng',
+        OrderEntity::STATUS_COMPLETED => 'Hoàn thành',
+        OrderEntity::STATUS_CANCELLED => 'Đã huỷ',
     ];
 
 
@@ -347,8 +337,8 @@ class AdminController extends BaseController
         $status = $this->get('status', '');
         $page   = $this->get('page', 1);
 
-        // Validate status nếu có truyền — tránh query DB với giá trị tùy ý
-        if ($status !== '' && !in_array($status, self::VALID_ORDER_STATUSES, true)) {
+        // Validate status — dùng getValidStatuses() để có 1 nguồn sự thật trong Controller
+        if ($status !== '' && !in_array($status, self::getValidStatuses(), true)) {
             $status = '';
         }
 
@@ -366,7 +356,6 @@ class AdminController extends BaseController
                 'currentStatus' => $status,
                 'statusLabels'  => self::ORDER_STATUS_LABELS,
                 'stats'         => [],
-                'flash'         => FlashMessage::get(),
                 'error'         => 'Không thể tải danh sách đơn hàng. Vui lòng thử lại.',
             ], 'Quản lý đơn hàng', 'orders');
             return;
@@ -390,7 +379,6 @@ class AdminController extends BaseController
             'currentStatus' => $status,
             'statusLabels'  => self::ORDER_STATUS_LABELS,
             'stats'         => $stats,
-            'flash'         => FlashMessage::get(), // đọc và xoá khỏi session
         ], 'Quản lý đơn hàng', 'orders');
     }
 
@@ -434,9 +422,8 @@ class AdminController extends BaseController
             'order'         => $order,
             'orderItems'    => $orderItems,
             'statusLabels'  => self::ORDER_STATUS_LABELS,
-            'validStatuses' => self::VALID_ORDER_STATUSES,
+            'validStatuses' => self::getValidStatuses(),
             'csrf_token'    => $this->generateCsrfToken(),
-            'flash'         => FlashMessage::get(),
         ], 'Chi tiết đơn hàng #' . $id . ' - Quản trị', 'orders');
     }
 
@@ -459,124 +446,138 @@ class AdminController extends BaseController
             return;
         }
 
-        // Verify CSRF
         if (!$this->verifyCsrfToken($this->post('csrf_token'))) {
-            if ($this->isAjax()) {
-                $this->jsonResponse(['success' => false, 'message' => 'Yêu cầu không hợp lệ (CSRF).'], 403);
-                return;
-            }
-            FlashMessage::error('Yêu cầu không hợp lệ. Vui lòng thử lại.');
-            $this->redirect('/admin/orders');
+            $this->respondError('Yêu cầu không hợp lệ (CSRF).', 403, '/admin/orders');
             return;
         }
 
         $id        = $this->post('id', 0);
         $newStatus = $this->post('status');
 
-        // Validate id
         if ($id <= 0) {
-            if ($this->isAjax()) {
-                $this->jsonResponse(['success' => false, 'message' => 'ID đơn hàng không hợp lệ.'], 400);
-                return;
-            }
-            FlashMessage::error('ID đơn hàng không hợp lệ.');
-            $this->redirect('/admin/orders');
+            $this->respondError('ID đơn hàng không hợp lệ.', 400, '/admin/orders');
             return;
         }
 
-        // Validate status
-        if (!in_array($newStatus, self::VALID_ORDER_STATUSES, true)) {
-            if ($this->isAjax()) {
-                $this->jsonResponse(['success' => false, 'message' => 'Trạng thái không hợp lệ.'], 400);
-                return;
-            }
-            FlashMessage::error('Trạng thái đơn hàng không hợp lệ.');
-            $this->redirect('/admin/orders/detail?id=' . $id);
+        // Validate status từ hằng số public của OrderEntity
+        if (!in_array($newStatus, self::getValidStatuses(), true)) {
+            $this->respondError('Trạng thái không hợp lệ.', 400, '/admin/orders/detail?id=' . $id);
             return;
         }
 
-        // Lấy đơn hàng — kiểm tra tồn tại
         try {
             $order = $this->orderService->getOrderById($id);
         } catch (RuntimeException $e) {
             error_log('[AdminController::updateOrderStatus] getOrderById: ' . $e->getMessage());
-            if ($this->isAjax()) {
-                $this->jsonResponse(['success' => false, 'message' => 'Lỗi hệ thống. Vui lòng thử lại.'], 500);
-                return;
-            }
-            FlashMessage::error('Lỗi hệ thống. Vui lòng thử lại.');
-            $this->redirect('/admin/orders');
+            $this->respondError('Lỗi hệ thống. Vui lòng thử lại.', 500, '/admin/orders');
             return;
         }
 
         if ($order === null) {
-            if ($this->isAjax()) {
-                $this->jsonResponse(['success' => false, 'message' => 'Không tìm thấy đơn hàng.'], 404);
-                return;
-            }
-            FlashMessage::error('Không tìm thấy đơn hàng #' . $id . '.');
-            $this->redirect('/admin/orders');
+            $this->respondError('Không tìm thấy đơn hàng #' . $id . '.', 404, '/admin/orders');
             return;
         }
 
-        // Không cập nhật nếu trạng thái không đổi
         if ($order->getStatus() === $newStatus) {
             $label = self::ORDER_STATUS_LABELS[$newStatus] ?? $newStatus;
-            if ($this->isAjax()) {
-                $this->jsonResponse(['success' => false, 'message' => "Đơn hàng đã ở trạng thái '{$label}'."], 400);
-                return;
-            }
-            FlashMessage::warning("Đơn hàng #$id đã ở trạng thái '{$label}', không cần cập nhật.");
-            $this->redirect('/admin/orders/detail?id=' . $id);
+            $this->respondError("Đơn hàng đã ở trạng thái '{$label}'.", 400, '/admin/orders/detail?id=' . $id, FlashMessage::TYPE_WARNING);
             return;
         }
 
-        // Thực hiện cập nhật
         try {
             $updated = $this->orderService->updateOrderStatus($id, $newStatus);
         } catch (RuntimeException $e) {
             error_log('[AdminController::updateOrderStatus] update: ' . $e->getMessage());
-            if ($this->isAjax()) {
-                $this->jsonResponse(['success' => false, 'message' => 'Lỗi hệ thống khi cập nhật. Vui lòng thử lại.'], 500);
-                return;
-            }
-            FlashMessage::error('Lỗi hệ thống khi cập nhật trạng thái. Vui lòng thử lại.');
-            $this->redirect('/admin/orders/detail?id=' . $id);
+            $this->respondError('Lỗi hệ thống khi cập nhật. Vui lòng thử lại.', 500, '/admin/orders/detail?id=' . $id);
             return;
         }
 
         $label = self::ORDER_STATUS_LABELS[$newStatus] ?? $newStatus;
 
+        if ($updated) {
+            $this->respondSuccess(
+                "Đơn hàng #$id đã chuyển sang '{$label}'.",
+                '/admin/orders/detail?id=' . $id,
+                ['newStatus' => $newStatus, 'label' => $label]
+            );
+        } else {
+            $this->respondError('Không thể cập nhật. Vui lòng thử lại.', 400, '/admin/orders/detail?id=' . $id);
+        }
+    }
+
+
+    // HELPER — AJAX / FORM RESPONSE
+
+    /**
+     * Trả về mảng các trạng thái đơn hàng hợp lệ, build từ hằng số public của OrderEntity.
+     * OrderEntity không có VALID_STATUSES array — dùng method này thay vì inline array
+     * ở nhiều chỗ để có 1 nguồn sự thật duy nhất trong Controller.
+     *
+     * @return string[]
+     */
+    private static function getValidStatuses(): array
+    {
+        return [
+            OrderEntity::STATUS_PENDING,
+            OrderEntity::STATUS_CONFIRMED,
+            OrderEntity::STATUS_SHIPPED,
+            OrderEntity::STATUS_COMPLETED,
+            OrderEntity::STATUS_CANCELLED,
+        ];
+    }
+
+    /**
+     * Trả lỗi nhất quán cho cả AJAX và form thông thường.
+     * AJAX → jsonResponse với HTTP status code.
+     * Form → FlashMessage + redirect.
+     *
+     * @param  string $message     Thông báo lỗi.
+     * @param  int    $httpStatus  HTTP status code (400, 403, 404, 500, ...).
+     * @param  string $redirectUrl URL redirect khi là form request.
+     * @param  string $flashType   Loại flash (mặc định error, có thể dùng warning).
+     * @return void
+     */
+    private function respondError(
+        string $message,
+        int    $httpStatus,
+        string $redirectUrl,
+        string $flashType = FlashMessage::TYPE_ERROR
+    ): void {
         if ($this->isAjax()) {
-            $this->jsonResponse([
-                'success'   => $updated,
-                'message'   => $updated
-                    ? "Đơn hàng #$id đã chuyển sang '{$label}'."
-                    : 'Không thể cập nhật. Vui lòng thử lại.',
-                'newStatus' => $newStatus,
-                'label'     => $label,
-            ]);
+            $this->jsonResponse(['success' => false, 'message' => $message], $httpStatus);
             return;
         }
+        FlashMessage::set($message, $flashType);
+        $this->redirect($redirectUrl);
+    }
 
-        if ($updated) {
-            FlashMessage::success("Đơn hàng #$id đã chuyển sang trạng thái '{$label}'.");
-        } else {
-            FlashMessage::error('Không thể cập nhật trạng thái. Vui lòng thử lại.');
+    /**
+     * Trả kết quả thành công nhất quán cho cả AJAX và form thông thường.
+     * AJAX → jsonResponse 200 kèm extra data.
+     * Form → FlashMessage success + redirect.
+     *
+     * @param  string $message     Thông báo thành công.
+     * @param  string $redirectUrl URL redirect khi là form request.
+     * @param  array  $extraData   Dữ liệu bổ sung trả về trong AJAX response.
+     * @return void
+     */
+    private function respondSuccess(string $message, string $redirectUrl, array $extraData = []): void
+    {
+        if ($this->isAjax()) {
+            $this->jsonResponse(array_merge(['success' => true, 'message' => $message], $extraData));
+            return;
         }
-
-        $this->redirect('/admin/orders/detail?id=' . $id);
+        FlashMessage::success($message);
+        $this->redirect($redirectUrl);
     }
 
 
     // RENDER LAYOUT ADMIN
 
     /**
-     * Gộp renderViewToString + renderView('layouts/admin') + adminUsername.
-     * Thêm 'flash' vào layout để hiển thị flash message ở mọi trang admin.
-     *
-     * Lưu ý khi merge vào AdminController.php chính: cập nhật renderAdmin()
-     * hiện tại thêm 'flash' => FlashMessage::get() vào mảng truyền vào layout.
+     * Gộp renderViewToString + renderView('layouts/admin') + adminUsername + flash.
+     * renderAdmin() là nơi DUY NHẤT gọi FlashMessage::get() — các method không
+     * truyền 'flash' vào $data nữa để tránh đọc 2 lần (lần 2 luôn rỗng).
      *
      * @param  string $view
      * @param  array  $data
@@ -593,7 +594,7 @@ class AdminController extends BaseController
             'title'         => $title,
             'activeMenu'    => $activeMenu,
             'adminUsername' => SessionHelper::getSessionUsername() ?? '',
-            'flash'         => FlashMessage::get(),
+            'flash'         => FlashMessage::get(), // đọc 1 lần duy nhất ở đây
         ]);
     }
 }
