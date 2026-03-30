@@ -4,13 +4,16 @@ require_once 'BaseController.php';
 require_once 'CartService.php';
 
 /**
- * Class CartController
- *
+ * CartController
+ * ---------------------
+ * Dùng để xử lý giỏ hàng:
+ * - Xem giỏ hàng
+ * - Thêm / xoá / cập nhật sản phẩm
+ * - Trả JSON nếu gọi bằng AJAX
  */
 class CartController extends BaseController
 {
     private CartService $cartService;
-
 
     // ================= CONSTRUCTOR =================
 
@@ -18,51 +21,14 @@ class CartController extends BaseController
     {
         parent::__construct();
 
-        /**
-         * Dependency Injection:
-         * - Có thể truyền CartService từ ngoài (test/unit test)
-         * - Nếu không có thì tự khởi tạo
-         */
+        // Nếu không truyền từ ngoài thì tự tạo
         $this->cartService = $cartService ?? new CartService();
     }
-
-
-    // ================= INPUT =================
-
-    /**
-     * Lấy dữ liệu từ request
-     *
-     * Cách làm:
-     * - Ưu tiên POST → GET → default
-     * - trim string để tránh lỗi khoảng trắng
-     * - có thể mở rộng sanitize nếu cần
-     */
-    private function getInput(string $key, $default = null)
-    {
-        $value = $_POST[$key] ?? $_GET[$key] ?? $default;
-
-        if (is_string($value)) {
-            $value = trim($value);
-
-            /**
-             * sanitize cơ bản chống XSS
-             * (áp dụng cho input dạng text như note, code giảm giá)
-             */
-            $value = htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
-        }
-
-        return $value;
-    }
-
 
     // ================= RESPONSE =================
 
     /**
-     * Trả JSON thống nhất
-     *
-     * Ý tưởng:
-     * - Tất cả API trả cùng format
-     * - Dễ xử lý phía frontend
+     * Trả JSON cho AJAX
      */
     private function json(bool $success, string $message = '', array $data = []): void
     {
@@ -73,12 +39,10 @@ class CartController extends BaseController
         ]);
     }
 
-
     /**
-     * Xử lý response linh hoạt
-     *
-     * - Nếu AJAX → trả JSON
-     * - Nếu request thường → redirect
+     * Xử lý trả kết quả:
+     * - AJAX → trả JSON
+     * - Không phải AJAX → redirect về cart
      */
     private function handle(bool $success, string $message = '', array $data = []): void
     {
@@ -90,7 +54,6 @@ class CartController extends BaseController
         $this->redirect('/cart');
     }
 
-
     // ================= VIEW =================
 
     /**
@@ -98,15 +61,18 @@ class CartController extends BaseController
      */
     public function index(): void
     {
-        $cart  = $this->cartService->all();
+        // Lấy danh sách sản phẩm trong giỏ
+        $cart = $this->cartService->all();
+
+        // Tính tổng tiền
         $total = $this->cartService->getTotal();
 
+        // Truyền dữ liệu sang view
         $this->renderView('cart/index', [
             'cart'  => $cart,
             'total' => $total
         ]);
     }
-
 
     // ================= ACTION =================
 
@@ -116,85 +82,75 @@ class CartController extends BaseController
     public function add(): void
     {
         try {
-            $productId = (int) $this->getInput('product_id');
-            $quantity  = (int) $this->getInput('quantity', 1);
+            // Ưu tiên POST → fallback GET (phòng trường hợp gọi từ link)
+            $productId = (int) $this->post('product_id', $this->get('product_id', 0));
+            $quantity  = (int) $this->post('quantity', 1);
 
-            // validate input
+            // Check dữ liệu
             if ($productId <= 0 || $quantity <= 0) {
                 $this->handle(false, 'Dữ liệu không hợp lệ');
                 return;
             }
 
+            // Gọi service để thêm
             $result = $this->cartService->add($productId, $quantity);
 
             $this->handle(
                 $result['success'],
-                $result['message'] ?? 'Thêm thành công',
-                $result['data'] ?? []
+                $result['message'] ?? 'Thêm thành công'
             );
-            return;
 
         } catch (Throwable $e) {
-            /**
-             * Không trả lỗi thô ra client
-             * → tránh lộ SQL / đường dẫn / hệ thống
-             */
+            // Không show lỗi hệ thống
             error_log($e->getMessage());
-
             $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
-            return;
         }
     }
 
-
     /**
-     * Xoá sản phẩm khỏi giỏ
+     * Xoá 1 sản phẩm khỏi giỏ
      */
     public function remove(): void
     {
         try {
-            $productId = (int) $this->getInput('product_id');
+            $productId = (int) $this->post('product_id', $this->get('product_id', 0));
 
             if ($productId <= 0) {
                 $this->handle(false, 'Product ID không hợp lệ');
                 return;
             }
 
+            // Gọi service xoá
             $result = $this->cartService->remove($productId);
 
             $this->handle(
                 $result['success'],
                 $result['message'] ?? 'Đã xoá'
             );
-            return;
 
         } catch (Throwable $e) {
             error_log($e->getMessage());
             $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
-            return;
         }
     }
 
-
     /**
-     * Cập nhật số lượng
+     * Cập nhật số lượng (AJAX)
      */
     public function update(): void
     {
         try {
-            $productId = (int) $this->getInput('product_id');
-            $quantity  = (int) $this->getInput('quantity');
+            
+            $productId = (int) $this->post('product_id', $this->get('product_id', 0));
+            $quantity  = (int) $this->post('quantity', $this->get('quantity', 0));
 
+            // Check dữ liệu
             if ($productId <= 0 || $quantity < 0) {
                 $this->json(false, 'Dữ liệu không hợp lệ');
                 return;
             }
 
-            /**
-             * Không gọi lại method remove()
-             * → tránh phụ thuộc ngầm vào input
-             * → gọi trực tiếp Service
-             */
+            // Nếu = 0 thì xoá luôn cho gọn
             if ($quantity === 0) {
                 $result = $this->cartService->remove($productId);
 
@@ -205,21 +161,19 @@ class CartController extends BaseController
                 return;
             }
 
+            // Cập nhật số lượng
             $result = $this->cartService->update($productId, $quantity);
 
             $this->json(
                 $result['success'],
                 $result['message'] ?? 'Cập nhật thành công'
             );
-            return;
 
         } catch (Throwable $e) {
             error_log($e->getMessage());
             $this->json(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
-            return;
         }
     }
-
 
     /**
      * Xoá toàn bộ giỏ hàng
@@ -230,15 +184,12 @@ class CartController extends BaseController
             $this->cartService->clear();
 
             $this->handle(true, 'Đã xoá toàn bộ giỏ hàng');
-            return;
 
         } catch (Throwable $e) {
             error_log($e->getMessage());
             $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
-            return;
         }
     }
-
 
     /**
      * Lấy tổng tiền (AJAX)
@@ -251,20 +202,10 @@ class CartController extends BaseController
             $this->json(true, 'OK', [
                 'total' => $total
             ]);
-            return;
 
         } catch (Throwable $e) {
             error_log($e->getMessage());
             $this->json(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
-            return;
         }
     }
 }
-
-/* Các vấn đề cần sửa: 
-* getInput() dùng htmlspecialchars() — encode HTML nhưng không sanitize SQL hay strip tags, và encode sớm có thể làm hỏng dữ liệu khi lưu DB: 
-Với input số (product_id, quantity) thì cast (int) đã an toàn, không cần htmlspecialchars(). Với input text thì encode khi output ra HTML mới đúng chỗ, không phải 
-khi đọc vào — nếu lưu DB thì DB sẽ chứa &amp; thay vì &. Nên bỏ htmlspecialchars ở đây, chỉ encode khi render view.
-* getInput() tự viết lại logic đã có trong BaseController::post() / get(): BaseController đã có post() và get() với cast kiểu theo $default. Nên bỏ getInput() và 
-dùng $this->post('product_id', 0) — gọn hơn, nhất quán toàn project.
-*/
