@@ -6,10 +6,10 @@ require_once 'CartService.php';
 /**
  * CartController
  * ---------------------
- * Dùng để xử lý giỏ hàng:
- * - Xem giỏ hàng
+ * Controller này dùng để xử lý toàn bộ chức năng liên quan đến giỏ hàng:
+ * - Hiển thị giỏ hàng
  * - Thêm / xoá / cập nhật sản phẩm
- * - Trả JSON nếu gọi bằng AJAX
+ * - Hỗ trợ trả dữ liệu dạng JSON khi dùng AJAX
  */
 class CartController extends BaseController
 {
@@ -21,14 +21,19 @@ class CartController extends BaseController
     {
         parent::__construct();
 
-        // Nếu không truyền từ ngoài thì tự tạo
+        /**
+         * Nếu không truyền CartService từ bên ngoài vào
+         * thì controller sẽ tự khởi tạo
+         * → giúp code linh hoạt hơn (có thể dùng dependency injection)
+         */
         $this->cartService = $cartService ?? new CartService();
     }
 
     // ================= RESPONSE =================
 
     /**
-     * Trả JSON cho AJAX
+     * Hàm trả dữ liệu JSON
+     * Dùng khi gọi AJAX từ phía client (JS)
      */
     private function json(bool $success, string $message = '', array $data = []): void
     {
@@ -40,9 +45,9 @@ class CartController extends BaseController
     }
 
     /**
-     * Xử lý trả kết quả:
-     * - AJAX → trả JSON
-     * - Không phải AJAX → redirect về cart
+     * Hàm xử lý response chung
+     * - Nếu là AJAX → trả JSON
+     * - Nếu không → redirect về trang cart
      */
     private function handle(bool $success, string $message = '', array $data = []): void
     {
@@ -51,23 +56,28 @@ class CartController extends BaseController
             return;
         }
 
+        // Trường hợp submit form bình thường
         $this->redirect('/cart');
     }
 
     // ================= VIEW =================
 
     /**
-     * Hiển thị giỏ hàng
+     * Hiển thị trang giỏ hàng
      */
     public function index(): void
     {
-        // Lấy danh sách sản phẩm trong giỏ
+        // Lấy toàn bộ sản phẩm trong giỏ
         $cart = $this->cartService->all();
 
-        // Tính tổng tiền
+        // Tính tổng tiền giỏ hàng
         $total = $this->cartService->getTotal();
 
-        // Truyền dữ liệu sang view
+        /**
+         * Truyền dữ liệu sang view:
+         * - cart: danh sách sản phẩm
+         * - total: tổng tiền
+         */
         $this->renderView('cart/index', [
             'cart'  => $cart,
             'total' => $total
@@ -77,42 +87,50 @@ class CartController extends BaseController
     // ================= ACTION =================
 
     /**
-     * Thêm sản phẩm vào giỏ
+     * Thêm sản phẩm vào giỏ hàng
      */
     public function add(): void
     {
         try {
-            // Ưu tiên POST → fallback GET (phòng trường hợp gọi từ link)
+            /**
+             * Lấy dữ liệu từ request:
+             * - Ưu tiên POST (đúng chuẩn)
+             * - fallback GET (phòng trường hợp gọi từ link)
+             */
             $productId = (int) $this->post('product_id', $this->get('product_id', 0));
             $quantity  = (int) $this->post('quantity', 1);
 
-            // Check dữ liệu
+            // Validate dữ liệu
             if ($productId <= 0 || $quantity <= 0) {
                 $this->handle(false, 'Dữ liệu không hợp lệ');
                 return;
             }
 
-            // Gọi service để thêm
+            // Gọi service để xử lý logic
             $result = $this->cartService->add($productId, $quantity);
 
+            // Trả kết quả
             $this->handle(
                 $result['success'],
                 $result['message'] ?? 'Thêm thành công'
             );
 
         } catch (Throwable $e) {
-            // Không show lỗi hệ thống
+            // Ghi log lỗi để debug
             error_log($e->getMessage());
+
+            // Không show lỗi hệ thống cho user
             $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
         }
     }
 
     /**
-     * Xoá 1 sản phẩm khỏi giỏ
+     * Xoá 1 sản phẩm khỏi giỏ hàng
      */
     public function remove(): void
     {
         try {
+            // Lấy product_id (POST chuẩn, fallback GET)
             $productId = (int) $this->post('product_id', $this->get('product_id', 0));
 
             if ($productId <= 0) {
@@ -120,7 +138,7 @@ class CartController extends BaseController
                 return;
             }
 
-            // Gọi service xoá
+            // Gọi service để xoá
             $result = $this->cartService->remove($productId);
 
             $this->handle(
@@ -135,22 +153,25 @@ class CartController extends BaseController
     }
 
     /**
-     * Cập nhật số lượng (AJAX)
+     * Cập nhật số lượng sản phẩm (dùng AJAX)
      */
     public function update(): void
     {
         try {
-            
+            // Lấy dữ liệu từ request
             $productId = (int) $this->post('product_id', $this->get('product_id', 0));
             $quantity  = (int) $this->post('quantity', $this->get('quantity', 0));
 
-            // Check dữ liệu
+            // Validate
             if ($productId <= 0 || $quantity < 0) {
                 $this->json(false, 'Dữ liệu không hợp lệ');
                 return;
             }
 
-            // Nếu = 0 thì xoá luôn cho gọn
+            /**
+             * Nếu quantity = 0
+             * → coi như xoá sản phẩm luôn (giúp code gọn hơn)
+             */
             if ($quantity === 0) {
                 $result = $this->cartService->remove($productId);
 
@@ -161,7 +182,7 @@ class CartController extends BaseController
                 return;
             }
 
-            // Cập nhật số lượng
+            // Update số lượng
             $result = $this->cartService->update($productId, $quantity);
 
             $this->json(
@@ -181,6 +202,7 @@ class CartController extends BaseController
     public function clear(): void
     {
         try {
+            // Gọi service để clear
             $this->cartService->clear();
 
             $this->handle(true, 'Đã xoá toàn bộ giỏ hàng');
@@ -192,13 +214,15 @@ class CartController extends BaseController
     }
 
     /**
-     * Lấy tổng tiền (AJAX)
+     * Lấy tổng tiền (dùng AJAX realtime)
      */
     public function total(): void
     {
         try {
+            // Lấy tổng tiền từ service
             $total = $this->cartService->getTotal();
 
+            // Trả về JSON
             $this->json(true, 'OK', [
                 'total' => $total
             ]);
