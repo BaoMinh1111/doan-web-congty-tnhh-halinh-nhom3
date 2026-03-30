@@ -248,39 +248,26 @@ class AdminMiddleware
  * Class AdminController (Phần 2 — Quản lý đơn hàng)
  *
  * Tách riêng với phần manageProducts để leader review song song.
- * Khi merge: copy 3 method, 1 hằng số ORDER_STATUS_LABELS và 2 private method
- * vào AdminController.php chính.
+ * Khi merge: copy 3 method public, 2 private helper và renderAdmin() vào AdminController.php chính.
  *
  * Nguồn sự thật cho trạng thái đơn hàng:
- *   Dùng OrderEntity::VALID_STATUSES — không tự định nghĩa lại trong Controller
- *   để tránh lệch giữa Controller, Service và Entity.
+ *   - OrderService::VALID_STATUSES  → danh sách trạng thái hợp lệ (public const)
+ *   - OrderService::STATUS_LABELS   → nhãn tiếng Việt (public const)
+ *   Controller KHÔNG tự định nghĩa lại — import thẳng từ Service.
+ *
+ * Kiểu trả về của OrderService:
+ *   - getOrderById()      → array|null  (không phải OrderEntity)
+ *   - getOrdersByStatus() → array ['data', 'total', 'currentPage', 'totalPages', 'limit', 'status']
+ *   - updateOrderStatus() → array ['success' => bool, 'message' => string, ...]
  *
  * CSRF methods (generateCsrfToken, verifyCsrfToken):
- *   Đã định nghĩa trong BaseController (protected) — AdminController kế thừa dùng thẳng,
- *   không cần định nghĩa lại ở đây.
+ *   Đã định nghĩa protected trong BaseController — kế thừa thẳng, không cần định nghĩa lại.
  *
  * @package App\Controllers
  * @author  Ha Linh Technology Solutions
  */
 class AdminController extends BaseController
 {
-    // HẰNG SỐ — nhãn hiển thị trạng thái đơn hàng
-
-    /**
-     * Nhãn tiếng Việt hiển thị cho từng trạng thái.
-     * Key khớp chính xác với 5 hằng số public của OrderEntity:
-     *   STATUS_PENDING / STATUS_CONFIRMED / STATUS_SHIPPED / STATUS_COMPLETED / STATUS_CANCELLED.
-     * STATUS_LABELS trong OrderEntity là private nên Controller tự định nghĩa nhãn UI ở đây.
-     */
-    private const ORDER_STATUS_LABELS = [
-        OrderEntity::STATUS_PENDING   => 'Đang chờ xác nhận',
-        OrderEntity::STATUS_CONFIRMED => 'Đã xác nhận',
-        OrderEntity::STATUS_SHIPPED   => 'Đang giao hàng',
-        OrderEntity::STATUS_COMPLETED => 'Hoàn thành',
-        OrderEntity::STATUS_CANCELLED => 'Đã huỷ',
-    ];
-
-
     // THUỘC TÍNH
 
     /**
@@ -337,15 +324,16 @@ class AdminController extends BaseController
         $status = $this->get('status', '');
         $page   = $this->get('page', 1);
 
-        // Validate status — dùng getValidStatuses() để có 1 nguồn sự thật trong Controller
-        if ($status !== '' && !in_array($status, self::getValidStatuses(), true)) {
+        // Validate status — OrderService::VALID_STATUSES là nguồn sự thật duy nhất
+        if ($status !== '' && !in_array($status, OrderService::VALID_STATUSES, true)) {
             $status = '';
         }
 
         try {
-            $orders     = $this->orderService->getOrdersByStatus($status, $page);
-            $totalPages = $this->orderService->countOrderPages($status);
-            // Đếm số đơn theo từng trạng thái — hiển thị badge số lượng trên tab lọc
+            // getOrdersByStatus() trả array ['data', 'total', 'currentPage', 'totalPages', ...]
+            $result     = $this->orderService->getOrdersByStatus($status, $page);
+            $orders     = $result['data']       ?? [];
+            $totalPages = $result['totalPages']  ?? 1;
             $stats      = $this->orderService->getOrderCountByStatus();
         } catch (RuntimeException $e) {
             error_log('[AdminController::manageOrders] ' . $e->getMessage());
@@ -354,18 +342,18 @@ class AdminController extends BaseController
                 'totalPages'    => 1,
                 'currentPage'   => 1,
                 'currentStatus' => $status,
-                'statusLabels'  => self::ORDER_STATUS_LABELS,
+                'statusLabels'  => OrderService::STATUS_LABELS,
                 'stats'         => [],
                 'error'         => 'Không thể tải danh sách đơn hàng. Vui lòng thử lại.',
             ], 'Quản lý đơn hàng', 'orders');
             return;
         }
 
-        // AJAX → trả JSON cho lọc realtime
+        // AJAX → trả JSON — $orders là array thô, json_encode thẳng
         if ($this->isAjax()) {
             $this->jsonResponse([
                 'success'    => true,
-                'orders'     => array_map(fn($o) => $o->toArray(), $orders),
+                'orders'     => $orders,
                 'totalPages' => $totalPages,
                 'page'       => $page,
             ]);
@@ -377,7 +365,7 @@ class AdminController extends BaseController
             'currentPage'   => $page,
             'totalPages'    => $totalPages,
             'currentStatus' => $status,
-            'statusLabels'  => self::ORDER_STATUS_LABELS,
+            'statusLabels'  => OrderService::STATUS_LABELS,
             'stats'         => $stats,
         ], 'Quản lý đơn hàng', 'orders');
     }
@@ -403,6 +391,7 @@ class AdminController extends BaseController
         }
 
         try {
+            // getOrderById() trả array|null — không phải OrderEntity
             $order      = $this->orderService->getOrderById($id);
             $orderItems = $this->orderService->getOrderItems($id);
         } catch (RuntimeException $e) {
@@ -419,10 +408,10 @@ class AdminController extends BaseController
         }
 
         $this->renderAdmin('admin/orders/detail', [
-            'order'         => $order,
+            'order'         => $order,       // array — view dùng $order['status'], $order['total_price'], ...
             'orderItems'    => $orderItems,
-            'statusLabels'  => self::ORDER_STATUS_LABELS,
-            'validStatuses' => self::getValidStatuses(),
+            'statusLabels'  => OrderService::STATUS_LABELS,
+            'validStatuses' => OrderService::VALID_STATUSES,
             'csrf_token'    => $this->generateCsrfToken(),
         ], 'Chi tiết đơn hàng #' . $id . ' - Quản trị', 'orders');
     }
@@ -459,72 +448,35 @@ class AdminController extends BaseController
             return;
         }
 
-        // Validate status từ hằng số public của OrderEntity
-        if (!in_array($newStatus, self::getValidStatuses(), true)) {
+        // Validate sơ bộ tại Controller — OrderService::VALID_STATUSES là nguồn sự thật
+        if (!in_array($newStatus, OrderService::VALID_STATUSES, true)) {
             $this->respondError('Trạng thái không hợp lệ.', 400, '/admin/orders/detail?id=' . $id);
             return;
         }
 
-        try {
-            $order = $this->orderService->getOrderById($id);
-        } catch (RuntimeException $e) {
-            error_log('[AdminController::updateOrderStatus] getOrderById: ' . $e->getMessage());
-            $this->respondError('Lỗi hệ thống. Vui lòng thử lại.', 500, '/admin/orders');
+        // Uỷ toàn bộ nghiệp vụ (state machine, kiểm tra tồn tại, hoàn kho) cho Service.
+        // Không tự query getOrderById() trước vì Service đã làm trong updateOrderStatus().
+        // updateOrderStatus() trả array ['success' => bool, 'message' => string, ...]
+        $result = $this->orderService->updateOrderStatus($id, $newStatus);
+
+        if (!$result['success']) {
+            // Service trả lỗi nghiệp vụ (terminal status, downgrade, not found, ...)
+            // Dùng 422 Unprocessable Entity cho lỗi nghiệp vụ, 500 cho lỗi hệ thống
+            $httpStatus = str_contains($result['message'], 'hệ thống') ? 500 : 422;
+            $this->respondError($result['message'], $httpStatus, '/admin/orders/detail?id=' . $id);
             return;
         }
 
-        if ($order === null) {
-            $this->respondError('Không tìm thấy đơn hàng #' . $id . '.', 404, '/admin/orders');
-            return;
-        }
-
-        if ($order->getStatus() === $newStatus) {
-            $label = self::ORDER_STATUS_LABELS[$newStatus] ?? $newStatus;
-            $this->respondError("Đơn hàng đã ở trạng thái '{$label}'.", 400, '/admin/orders/detail?id=' . $id, FlashMessage::TYPE_WARNING);
-            return;
-        }
-
-        try {
-            $updated = $this->orderService->updateOrderStatus($id, $newStatus);
-        } catch (RuntimeException $e) {
-            error_log('[AdminController::updateOrderStatus] update: ' . $e->getMessage());
-            $this->respondError('Lỗi hệ thống khi cập nhật. Vui lòng thử lại.', 500, '/admin/orders/detail?id=' . $id);
-            return;
-        }
-
-        $label = self::ORDER_STATUS_LABELS[$newStatus] ?? $newStatus;
-
-        if ($updated) {
-            $this->respondSuccess(
-                "Đơn hàng #$id đã chuyển sang '{$label}'.",
-                '/admin/orders/detail?id=' . $id,
-                ['newStatus' => $newStatus, 'label' => $label]
-            );
-        } else {
-            $this->respondError('Không thể cập nhật. Vui lòng thử lại.', 400, '/admin/orders/detail?id=' . $id);
-        }
+        $label = OrderService::STATUS_LABELS[$newStatus] ?? $newStatus;
+        $this->respondSuccess(
+            $result['message'],   // dùng message từ Service — đã có nhãn tiếng Việt
+            '/admin/orders/detail?id=' . $id,
+            ['newStatus' => $newStatus, 'label' => $label]
+        );
     }
 
 
     // HELPER — AJAX / FORM RESPONSE
-
-    /**
-     * Trả về mảng các trạng thái đơn hàng hợp lệ, build từ hằng số public của OrderEntity.
-     * OrderEntity không có VALID_STATUSES array — dùng method này thay vì inline array
-     * ở nhiều chỗ để có 1 nguồn sự thật duy nhất trong Controller.
-     *
-     * @return string[]
-     */
-    private static function getValidStatuses(): array
-    {
-        return [
-            OrderEntity::STATUS_PENDING,
-            OrderEntity::STATUS_CONFIRMED,
-            OrderEntity::STATUS_SHIPPED,
-            OrderEntity::STATUS_COMPLETED,
-            OrderEntity::STATUS_CANCELLED,
-        ];
-    }
 
     /**
      * Trả lỗi nhất quán cho cả AJAX và form thông thường.
