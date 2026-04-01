@@ -10,13 +10,15 @@ require_once 'CartService.php';
  * - Hiển thị giỏ hàng
  * - Thêm / xoá / cập nhật sản phẩm
  * - Hỗ trợ trả dữ liệu dạng JSON khi dùng AJAX
+ * 
+ * 1. Test AJAX cart + promotion (realtime tính tiền)
+ * 2. Thêm validation giỏ hàng (số lượng > 0, tồn kho)
  */
 class CartController extends BaseController
 {
     private CartService $cartService;
 
     // ================= CONSTRUCTOR =================
-
     public function __construct(?CartService $cartService = null)
     {
         parent::__construct();
@@ -30,7 +32,6 @@ class CartController extends BaseController
     }
 
     // ================= RESPONSE =================
-
     /**
      * Hàm trả dữ liệu JSON
      * Dùng khi gọi AJAX từ phía client (JS)
@@ -61,7 +62,6 @@ class CartController extends BaseController
     }
 
     // ================= VIEW =================
-
     /**
      * Hiển thị trang giỏ hàng
      */
@@ -70,13 +70,13 @@ class CartController extends BaseController
         // Lấy toàn bộ sản phẩm trong giỏ
         $cart = $this->cartService->all();
 
-        // Tính tổng tiền giỏ hàng
+        // Tính tổng tiền giỏ hàng (bao gồm promotion nếu có)
         $total = $this->cartService->getTotal();
 
         /**
          * Truyền dữ liệu sang view:
          * - cart: danh sách sản phẩm
-         * - total: tổng tiền
+         * - total: tổng tiền (subtotal, discount, total)
          */
         $this->renderView('cart/index', [
             'cart'  => $cart,
@@ -85,28 +85,27 @@ class CartController extends BaseController
     }
 
     // ================= ACTION =================
-
     /**
      * Thêm sản phẩm vào giỏ hàng
+     * BƯỚC LÀM:
+     * 1. Lấy product_id và quantity từ POST/GET
+     * 2. Validate dữ liệu (>0)
+     * 3. Gọi CartService->add() (check tồn kho, số lượng)
+     * 4. Trả kết quả (AJAX hoặc redirect)
      */
     public function add(): void
     {
         try {
-            /**
-             * Lấy dữ liệu từ request:
-             * - Ưu tiên POST (đúng chuẩn)
-             * - fallback GET (phòng trường hợp gọi từ link)
-             */
             $productId = (int) $this->post('product_id', $this->get('product_id', 0));
             $quantity  = (int) $this->post('quantity', 1);
 
-            // Validate dữ liệu
+            // ===== VALIDATION =====
             if ($productId <= 0 || $quantity <= 0) {
-                $this->handle(false, 'Dữ liệu không hợp lệ');
+                $this->handle(false, 'Dữ liệu không hợp lệ (quantity > 0)');
                 return;
             }
 
-            // Gọi service để xử lý logic
+            // Gọi service để thêm
             $result = $this->cartService->add($productId, $quantity);
 
             // Trả kết quả
@@ -116,21 +115,22 @@ class CartController extends BaseController
             );
 
         } catch (Throwable $e) {
-            // Ghi log lỗi để debug
             error_log($e->getMessage());
-
-            // Không show lỗi hệ thống cho user
             $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
         }
     }
 
     /**
      * Xoá 1 sản phẩm khỏi giỏ hàng
+     * BƯỚC LÀM:
+     * 1. Lấy product_id
+     * 2. Validate ID
+     * 3. Gọi CartService->remove()
+     * 4. Trả kết quả
      */
     public function remove(): void
     {
         try {
-            // Lấy product_id (POST chuẩn, fallback GET)
             $productId = (int) $this->post('product_id', $this->get('product_id', 0));
 
             if ($productId <= 0) {
@@ -138,7 +138,6 @@ class CartController extends BaseController
                 return;
             }
 
-            // Gọi service để xoá
             $result = $this->cartService->remove($productId);
 
             $this->handle(
@@ -153,28 +152,30 @@ class CartController extends BaseController
     }
 
     /**
-     * Cập nhật số lượng sản phẩm (dùng AJAX)
+     * Cập nhật số lượng sản phẩm (AJAX)
+     * BƯỚC LÀM:
+     * 1. Lấy product_id và quantity
+     * 2. Validate dữ liệu (>0, <= tồn kho)
+     * 3. Nếu quantity=0 → remove luôn
+     * 4. Gọi CartService->update()
+     * 5. Trả kết quả JSON
+     * 6. AJAX phía client có thể gọi total() để update realtime
      */
     public function update(): void
     {
         try {
-            // Lấy dữ liệu từ request
             $productId = (int) $this->post('product_id', $this->get('product_id', 0));
             $quantity  = (int) $this->post('quantity', $this->get('quantity', 0));
 
-            // Validate
+            // ===== VALIDATION =====
             if ($productId <= 0 || $quantity < 0) {
-                $this->json(false, 'Dữ liệu không hợp lệ');
+                $this->json(false, 'Dữ liệu không hợp lệ (quantity >= 0)');
                 return;
             }
 
-            /**
-             * Nếu quantity = 0
-             * → coi như xoá sản phẩm luôn (giúp code gọn hơn)
-             */
+            // Nếu = 0 → xoá luôn
             if ($quantity === 0) {
                 $result = $this->cartService->remove($productId);
-
                 $this->json(
                     $result['success'],
                     $result['message'] ?? 'Đã xoá'
@@ -185,9 +186,16 @@ class CartController extends BaseController
             // Update số lượng
             $result = $this->cartService->update($productId, $quantity);
 
+            // ===== AJAX realtime total =====
+            $total = $this->cartService->getTotal(); // bao gồm promotion, discount
+
             $this->json(
                 $result['success'],
-                $result['message'] ?? 'Cập nhật thành công'
+                $result['message'] ?? 'Cập nhật thành công',
+                [
+                    'item'  => $result['data'] ?? [],
+                    'total' => $total
+                ]
             );
 
         } catch (Throwable $e) {
@@ -202,11 +210,8 @@ class CartController extends BaseController
     public function clear(): void
     {
         try {
-            // Gọi service để clear
             $this->cartService->clear();
-
             $this->handle(true, 'Đã xoá toàn bộ giỏ hàng');
-
         } catch (Throwable $e) {
             error_log($e->getMessage());
             $this->handle(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
@@ -214,19 +219,21 @@ class CartController extends BaseController
     }
 
     /**
-     * Lấy tổng tiền (dùng AJAX realtime)
+     * Lấy tổng tiền (AJAX realtime)
+     * BƯỚC LÀM:
+     * 1. Gọi CartService->getTotal()
+     * 2. Trả JSON total (bao gồm subtotal, discount, total)
+     * 3. Phía client update ngay trên view
      */
     public function total(): void
     {
         try {
-            // Lấy tổng tiền từ service
             $total = $this->cartService->getTotal();
-
-            // Trả về JSON
             $this->json(true, 'OK', [
-                'total' => $total
+                'total'    => $total['data']['total'] ?? 0,
+                'subtotal' => $total['data']['subtotal'] ?? 0,
+                'discount' => $total['data']['discount'] ?? 0
             ]);
-
         } catch (Throwable $e) {
             error_log($e->getMessage());
             $this->json(false, 'Đã xảy ra lỗi, vui lòng thử lại.');
