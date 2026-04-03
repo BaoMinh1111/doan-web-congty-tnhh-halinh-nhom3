@@ -48,7 +48,7 @@ CREATE TABLE `customers` (
   `email` varchar(100) NOT NULL,
   `phone` varchar(15) NOT NULL,
   `address` text NOT NULL,
-  `note` text NOT NULL
+  `note` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -88,13 +88,13 @@ CREATE TABLE `orders` (
   `id` int(11) NOT NULL,
   `user_id` int(11) NOT NULL,
   `customer_id` int(11) NOT NULL,
-  `promotion_id` int(11) NOT NULL,
+  `promotion_id` int(11) DEFAULT NULL,
   `total_price` decimal(12,2) NOT NULL,
   `status` varchar(50) NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `customer_name` varchar(255) NOT NULL,
   `customer_address` text NOT NULL,
-  `note` text NOT NULL
+  `note` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -110,9 +110,9 @@ CREATE TABLE `products` (
   `price` decimal(10,2) NOT NULL,
   `image` varchar(255) NOT NULL,
   `description` text NOT NULL,
+  `stock` int(11) NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `stock` int(11) NOT NULL
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -127,7 +127,7 @@ CREATE TABLE `promotions` (
   `type` varchar(20) NOT NULL,
   `value` decimal(10,2) NOT NULL,
   `min_order_amount` decimal(10,2) NOT NULL,
-  `max_users` int(11) NOT NULL,
+  `max_uses` int(11) NOT NULL,
   `used_count` int(11) NOT NULL,
   `start_date` datetime NOT NULL,
   `end_date` datetime NOT NULL,
@@ -303,10 +303,20 @@ COMMIT;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 
 --
+-- Đang đổ dữ liệu cho bảng `users`
+--
+
+INSERT INTO `users` (`id`, `username`, `password_hash`, `role`, `email`) VALUES
+(1, 'admin', '$2y$10$hashadmin123', 'admin', 'admin@shop.vn'),
+(2, 'lananh', '$2y$10$hashlananh', 'user', 'lananh@gmail.com'),
+(3, 'minhduc', '$2y$10$hashminhduc', 'user', 'minhduc@gmail.com'),
+(4, 'hoangvy', '$2y$10$hashhoangvy', 'user', 'hoangvy@gmail.com'),
+(5, 'quanghuy', '$2y$10$hashquanghuy', 'user', 'quanghuy@gmail.com');
+--
 -- Đang đổ dữ liệu cho bảng `categories`
 --
 
-INSERT INTO `categories` (`id`, `name`, `description`, `create_at`, `updated_at`) VALUES
+INSERT INTO `categories` (`id`, `name`, `description`, `created_at`, `updated_at`) VALUES
 (1, 'Điện thoại', 'Smartphone các hãng', '2026-02-27 16:07:18', '2026-02-27 16:07:18'),
 (2, 'Laptop', 'Máy tính xách tay', '2026-02-27 16:07:18', '2026-02-27 16:07:18'),
 (3, 'Tai nghe & Loa', 'Thiết bị âm thanh', '2026-02-27 16:07:18', '2026-02-27 16:07:18'),
@@ -321,57 +331,6 @@ INSERT INTO `customers` (`id`, `user_id`, `name`, `email`, `phone`, `address`, `
 (2, 3, 'Trần Minh Đức', 'minhduc@gmail.com', '0912345678', '78 Lê Lợi, Pleiku', NULL),
 (3, 4, 'Lê Hoàng Vy', 'hoangvy@gmail.com', '0935123456', '12 Trần Phú, Pleiku', NULL),
 (4, 5, 'Phạm Quang Huy', 'quanghuy@gmail.com', '0978123456', '99 Hùng Vương, Pleiku', 'Mua phụ kiện nhiều');
---
--- Đang đổ dữ liệu cho bảng `inventories`
---
-
-INSERT INTO `inventories` (`id`, `product_id`, `quantity`, `last_updated`) VALUES
-(1, 1, 38, '2026-02-27 16:07:19'),
-(2, 2, 22, '2026-02-27 16:07:19'),
-(3, 3, 55, '2026-02-27 16:07:19'),
-(4, 4, 18, '2026-02-27 16:07:19'),
-(5, 5, 14, '2026-02-27 16:07:19'),
-(6, 6, 9, '2026-02-27 16:07:19'),
-(7, 7, 72, '2026-02-27 16:07:19'),
-(8, 8, 120, '2026-02-27 16:07:19'),
-(9, 9, 200, '2026-02-27 16:07:19'),
-(10, 10, 85, '2026-02-27 16:07:19'),
-(11, 11, 25, '2026-02-27 16:07:19'),
-(12, 12, 30, '2026-02-27 16:07:19');
---
--- Đang đổ dữ liệu cho bảng `orderdetails`
---
-
-INSERT INTO `orderdetails` (`id`, `order_id`, `product_id`, `quantity`, `price_at_purchase`) VALUES
-(1, 1, 1, 1, 34990000.00),
-(2, 1, 7, 1, 8490000.00),
-(3, 2, 2, 1, 32990000.00),
-(4, 2, 5, 1, 35990000.00),
-(5, 3, 7, 1, 8490000.00),
-(6, 4, 8, 1, 2990000.00),
-(7, 4, 10, 1, 890000.00),
-(8, 5, 5, 1, 35990000.00),
-(9, 6, 3, 1, 18990000.00),
-(10, 6, 4, 1, 28990000.00),
-(11, 7, 6, 1, 39990000.00),
-(12, 8, 9, 1, 450000.00),
-(13, 9, 11, 1, 22990000.00),
-(14, 10, 12, 1, 11990000.00);
---
--- Đang đổ dữ liệu cho bảng `orders`
---
-
-INSERT INTO `orders` (`id`, `user_id`, `customer_id`, `promotion_id`, `total_price`, `status`, `created_at`, `customer_name`, `customer_address`, `note`) VALUES
-(1, 2, 1, 1, 31491000.00, 'pending', '2026-02-20 03:00:00', 'Lan Anh', '45 Nguyễn Văn Trỗi', 'Giao nhanh'),
-(2, 3, 2, 2, 26991750.00, 'processing', '2026-02-21 07:30:00', 'Minh Đức', '78 Lê Lợi', NULL),
-(3, 4, 3, NULL, 8490000.00, 'shipped', '2026-02-22 02:15:00', 'Hoàng Vy', '12 Trần Phú', 'Gói cẩn thận'),
-(4, 5, 4, 3, 2840000.00, 'delivered', '2026-02-23 11:45:00', 'Quang Huy', '99 Hùng Vương', NULL),
-(5, 2, 1, NULL, 35990000.00, 'cancelled', '2026-02-24 04:20:00', 'Lan Anh', '45 Nguyễn Văn Trỗi', 'Hủy do đổi ý'),
-(6, 3, 2, 1, 32390200.00, 'pending', '2026-02-25 01:00:00', 'Minh Đức', '78 Lê Lợi', NULL),
-(7, 4, 3, 4, 7199250.00, 'processing', '2026-02-26 09:30:00', 'Hoàng Vy', '12 Trần Phú', NULL),
-(8, 5, 4, NULL, 450000.00, 'shipped', '2026-02-27 06:00:00', 'Quang Huy', '99 Hùng Vương', 'Mua quà tặng'),
-(9, 2, 1, 5, 22990000.00, 'pending', '2026-02-27 08:00:00', 'Lan Anh', '45 Nguyễn Văn Trỗi', NULL),
-(10, 3, 2, NULL, 11990000.00, 'delivered', '2026-02-27 09:30:00', 'Minh Đức', '78 Lê Lợi', NULL);
 --
 -- Đang đổ dữ liệu cho bảng `products`
 --
@@ -401,12 +360,56 @@ INSERT INTO `promotions` (`id`, `code`, `type`, `value`, `min_order_amount`, `ma
 (5, 'VIP50K', 'fixed', 50000.00, 0.00, 500, 320, '2025-02-01', '2026-02-01', 1),
 (6, 'TEST5K', 'fixed', 5000.00, 0.00, 2000, 1200, '2025-01-01', '2026-01-01', 1);
 --
--- Đang đổ dữ liệu cho bảng `users`
+-- Đang đổ dữ liệu cho bảng `inventories`
 --
 
-INSERT INTO `users` (`id`, `username`, `password_hash`, `role`, `email`) VALUES
-(1, 'admin', '$2y$10$hashadmin123', 'admin', 'admin@shop.vn'),
-(2, 'lananh', '$2y$10$hashlananh', 'user', 'lananh@gmail.com'),
-(3, 'minhduc', '$2y$10$hashminhduc', 'user', 'minhduc@gmail.com'),
-(4, 'hoangvy', '$2y$10$hashhoangvy', 'user', 'hoangvy@gmail.com'),
-(5, 'quanghuy', '$2y$10$hashquanghuy', 'user', 'quanghuy@gmail.com');
+INSERT INTO `inventories` (`id`, `product_id`, `quantity`, `last_updated`) VALUES
+(1, 1, 38, '2026-02-27 16:07:19'),
+(2, 2, 22, '2026-02-27 16:07:19'),
+(3, 3, 55, '2026-02-27 16:07:19'),
+(4, 4, 18, '2026-02-27 16:07:19'),
+(5, 5, 14, '2026-02-27 16:07:19'),
+(6, 6, 9, '2026-02-27 16:07:19'),
+(7, 7, 72, '2026-02-27 16:07:19'),
+(8, 8, 120, '2026-02-27 16:07:19'),
+(9, 9, 200, '2026-02-27 16:07:19'),
+(10, 10, 85, '2026-02-27 16:07:19'),
+(11, 11, 25, '2026-02-27 16:07:19'),
+(12, 12, 30, '2026-02-27 16:07:19');
+--
+-- Đang đổ dữ liệu cho bảng `orders`
+--
+
+INSERT INTO `orders` (`id`, `user_id`, `customer_id`, `promotion_id`, `total_price`, `status`, `created_at`, `customer_name`, `customer_address`, `note`) VALUES
+(1, 2, 1, 1, 31491000.00, 'pending', '2026-02-20 03:00:00', 'Lan Anh', '45 Nguyễn Văn Trỗi', 'Giao nhanh'),
+(2, 3, 2, 2, 26991750.00, 'processing', '2026-02-21 07:30:00', 'Minh Đức', '78 Lê Lợi', NULL),
+(3, 4, 3, NULL, 8490000.00, 'shipped', '2026-02-22 02:15:00', 'Hoàng Vy', '12 Trần Phú', 'Gói cẩn thận'),
+(4, 5, 4, 3, 2840000.00, 'delivered', '2026-02-23 11:45:00', 'Quang Huy', '99 Hùng Vương', NULL),
+(5, 2, 1, NULL, 35990000.00, 'cancelled', '2026-02-24 04:20:00', 'Lan Anh', '45 Nguyễn Văn Trỗi', 'Hủy do đổi ý'),
+(6, 3, 2, 1, 32390200.00, 'pending', '2026-02-25 01:00:00', 'Minh Đức', '78 Lê Lợi', NULL),
+(7, 4, 3, 4, 7199250.00, 'processing', '2026-02-26 09:30:00', 'Hoàng Vy', '12 Trần Phú', NULL),
+(8, 5, 4, NULL, 450000.00, 'shipped', '2026-02-27 06:00:00', 'Quang Huy', '99 Hùng Vương', 'Mua quà tặng'),
+(9, 2, 1, 5, 22990000.00, 'pending', '2026-02-27 08:00:00', 'Lan Anh', '45 Nguyễn Văn Trỗi', NULL),
+(10, 3, 2, NULL, 11990000.00, 'delivered', '2026-02-27 09:30:00', 'Minh Đức', '78 Lê Lợi', NULL);
+--
+-- Đang đổ dữ liệu cho bảng `orderdetails`
+--
+
+INSERT INTO `orderdetails` (`id`, `order_id`, `product_id`, `quantity`, `price_at_purchase`) VALUES
+(1, 1, 1, 1, 34990000.00),
+(2, 1, 7, 1, 8490000.00),
+(3, 2, 2, 1, 32990000.00),
+(4, 2, 5, 1, 35990000.00),
+(5, 3, 7, 1, 8490000.00),
+(6, 4, 8, 1, 2990000.00),
+(7, 4, 10, 1, 890000.00),
+(8, 5, 5, 1, 35990000.00),
+(9, 6, 3, 1, 18990000.00),
+(10, 6, 4, 1, 28990000.00),
+(11, 7, 6, 1, 39990000.00),
+(12, 8, 9, 1, 450000.00),
+(13, 9, 11, 1, 22990000.00),
+(14, 10, 12, 1, 11990000.00);
+
+
+
