@@ -1,0 +1,184 @@
+/* ============================================================
+   HÀ LINH TECH - THEME MỪNG ĐẠI LỄ 30/04 & 01/05 (FINAL)
+   ============================================================ */
+
+:root {
+  --holiday-red: #c8102e;     /* Đỏ cờ Tổ quốc */
+  --holiday-dark-red: #8b0000;
+  --holiday-yellow: #ffcd00;  /* Vàng sao */
+  --holiday-gold: #ffd700;
+  --bg-light: #f8f9fa;
+  --text-dark: #2d3436;
+}
+
+body {
+  background-color: #fdfdfd;
+  font-family: "Segoe UI", Roboto, -apple-system, sans-serif;
+  color: var(--text-dark);
+}
+
+/* --- 1. CẢI TIẾN TRANG CHỦ (SLIDER & CARD) --- */
+.btn-holiday {
+  background-color: var(--holiday-yellow) !important;
+  color: #000 !important;
+  font-weight: bold;
+  border: none;
+  border-radius: 50px;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.btn-holiday:hover {
+  transform: scale(1.05) translateY(-3px);
+  box-shadow: 0 10px 20px rgba(255, 205, 0, 0.4);
+  background-color: #ffdb33 !important;
+}
+
+.product-hover {
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  border: 1px solid #eee !important;
+}
+
+.product-hover:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1) !important;
+  border-color: var(--holiday-red) !important;
+}
+
+/* Hiệu ứng cắt chữ cho tên sản phẩm (tối đa 2 dòng) */
+.text-truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- 2. CẢI TIẾN TRANG CHI TIẾT (DETAIL PAGE) --- */
+.product-image-card {
+  background: #fff;
+  transition: all 0.4s ease;
+}
+
+.price-container {
+  background: #fff5f5 !important;
+}
+
+/* Nút tăng giảm số lượng hiện đại */
+.quantity-input input::-webkit-outer-spin-button,
+.quantity-input input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.hover-lift {
+  transition: all 0.2s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-3px);
+  filter: brightness(1.1);
+}
+
+/* --- 3. TIỆN ÍCH CHUNG (UTILITIES) --- */
+.rounded-4 {
+  border-radius: 1.25rem !important;
+}
+.shadow-xs {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Đường viền đứt đoạn cho box quà tặng */
+.border-dashed {
+  border: 2px dashed var(--holiday-yellow) !important;
+}
+
+/* Custom Scrollbar cho tông đỏ lễ hội */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--holiday-red);
+  border-radius: 10px;
+}
+
+/* --- 4. ANIMATIONS --- */
+.animate__animated {
+  animation-duration: 0.8s;
+}
+
+/* Hiệu ứng hào quang cho nút quan trọng */
+@keyframes glow {
+  0%   { box-shadow: 0 0 5px  rgba(200, 16, 46, 0.2); }
+  50%  { box-shadow: 0 0 20px rgba(200, 16, 46, 0.6); }
+  100% { box-shadow: 0 0 5px  rgba(200, 16, 46, 0.2); }
+}
+
+.btn-danger.shadow {
+  animation: glow 3s infinite;
+}
+
+.bg-purple { background-color: #6f42c1; }
+
+/* ============================================================
+   ĐỒNG BỘ KÍCH THƯỚC HÌNH ẢNH SẢN PHẨM
+   FIX: Bỏ flexbox, dùng object-fit trực tiếp để tránh xung đột
+        với Bootstrap .img-fluid (height: auto)
+   ============================================================ */
+
+/* Container ảnh: kích thước cố định, clip ảnh tràn ra ngoài */
+.product-image {
+  width: 100%;
+  height: 235px;
+  overflow: hidden;
+  border-radius: 8px;
+  background-color: #f8f9fa;
+}
+
+.product-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block; /* Xóa khoảng trắng dưới ảnh do inline */
+}
+
+/* Card sản phẩm full-height để các card cùng hàng đều cao */
+.card-product {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.card-product .card-body {
+  flex: 1;
+}
+
+/* ================== FIX BẢNG TRÊN ĐIỆN THOẠI ================== */
+.table-responsive {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;   /* Scroll mượt trên iOS */
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+}
+
+.table-responsive table {
+  min-width: 680px;   /* Đảm bảo bảng rộng hơn màn hình mobile để scroll xuất hiện */
+}
+
+@media (max-width: 576px) {
+  .table th,
+  .table td {
+    padding: 12px 8px;
+    font-size: 15px;
+  }
+
+  /* Tên sản phẩm được xuống dòng khi quá dài trên mobile */
+  .table td:first-child {
+    white-space: normal;
+    word-break: break-word;
+  }
+}

@@ -1,0 +1,9 @@
+RewriteEngine On
+
+# Ngăn truy cập trực tiếp vào các thư mục chứa code
+Options -Indexes
+
+# Nếu đường dẫn không phải là file hoặc thư mục thật, thì đẩy về index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
